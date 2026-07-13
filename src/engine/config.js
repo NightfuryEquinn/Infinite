@@ -1,5 +1,6 @@
 /* Shared world / engine constants */
 
+export var TREE_MAX_PER_CHUNK = 5;
 export var CHUNK_SIZE = 64;
 export var TREE_HEIGHT_SCALE = 1.8;
 export var CHUNK_RES = 36;

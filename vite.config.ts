@@ -3,4 +3,9 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ['assimpjs'],
+    needsInterop: ['assimpjs']
+  },
+  assetsInclude: ['**/*.wasm', '**/*.3ds', '**/*.blend']
 })

@@ -7,7 +7,7 @@ import { biomeName, mapColor } from './biomes/index.js';
 import { spawnBeacon } from './elements/beacons.js';
 import { spawnRocks, buildRockGeometry } from './elements/rocks.js';
 import { SKY_FRAG, SKY_VERT } from './elements/sky.js';
-import { spawnTrees, buildTreeGeometry, TREE_FRAG, TREE_VERT } from './elements/trees.js';
+import { spawnTrees, loadTreeAssets, TREE_FRAG, TREE_VERT } from './elements/trees.js';
 import {
   createFloorHeightmap, updateFloorHeightmap,
   WATER_FLOOR_EXTENT, WATER_FLOOR_MAX, WATER_FLOOR_MIN
@@ -119,8 +119,8 @@ export class InfiniteWorld extends HTMLElement {
     return {
       THREE: this._THREE,
       scene: this._scene,
-      treeGeo: this._treeGeo,
-      treeMat: this._treeMat,
+      treeVariants: this._treeVariants,
+      treeEnv: this._treeEnv,
       rockGeo: this._rockGeo,
       rockMat: this._rockMat,
       beaconGeo: this._beaconGeo,
@@ -138,6 +138,8 @@ export class InfiniteWorld extends HTMLElement {
     this._pxCap = Math.min(window.devicePixelRatio || 1, 1.75);
     this._px = this._pxCap;
     renderer.setPixelRatio(this._px);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.domElement.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1;cursor:crosshair;';
     this._root.insertBefore(renderer.domElement, this._root.firstChild);
     this._renderer = renderer;
@@ -161,6 +163,24 @@ export class InfiniteWorld extends HTMLElement {
     this._lightI = { value: 1 };
     this._nightI = { value: 0 };
 
+    this._ambLight = new THREE.AmbientLight(0xb8c8e0, 0.55);
+    scene.add(this._ambLight);
+
+    this._sunLight = new THREE.DirectionalLight(0xfff0dc, 1.15);
+    this._sunLight.position.copy(sunDir).multiplyScalar(180);
+    this._sunLight.castShadow = true;
+    this._sunLight.shadow.mapSize.set(1024, 1024);
+    this._sunLight.shadow.camera.near = 2;
+    this._sunLight.shadow.camera.far = 420;
+    this._sunLight.shadow.camera.left = -110;
+    this._sunLight.shadow.camera.right = 110;
+    this._sunLight.shadow.camera.top = 110;
+    this._sunLight.shadow.camera.bottom = -110;
+    this._sunLight.shadow.bias = -0.0004;
+    this._sunLight.shadow.normalBias = 0.03;
+    scene.add(this._sunLight);
+    scene.add(this._sunLight.target);
+
     this._terrainMat = new THREE.ShaderMaterial({
       uniforms: {
         uSunDir: { value: sunDir },
@@ -168,7 +188,12 @@ export class InfiniteWorld extends HTMLElement {
         uSunCol: { value: this._sunLightCol },
         uFogColor: { value: fogColor },
         uFogNear: { value: FOG_NEAR },
-        uFogFar: { value: FOG_FAR }
+        uFogFar: { value: FOG_FAR },
+        uShadowMap: { value: this._sunLight.shadow.map },
+        uShadowMatrix: { value: this._sunLight.shadow.matrix },
+        uShadowMapSize: { value: new THREE.Vector2(1024, 1024) },
+        uShadowBias: { value: 0.0006 },
+        uShadowMix: { value: 1.0 }
       },
       vertexShader: TERRAIN_VERT,
       fragmentShader: TERRAIN_FRAG
@@ -246,21 +271,25 @@ export class InfiniteWorld extends HTMLElement {
     this._camY = sh + EYE_HEIGHT;
     this._groundH = sh;
 
-    this._treeGeo = buildTreeGeometry(THREE);
-    this._treeMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-        uGust: { value: 0.6 },
-        uSunDir: { value: sunDir },
-        uAmbient: { value: this._ambientCol },
-        uSunCol: { value: this._sunLightCol },
-        uFogColor: { value: fogColor },
-        uFogNear: { value: FOG_NEAR },
-        uFogFar: { value: FOG_FAR }
-      },
-      vertexShader: TREE_VERT,
-      fragmentShader: TREE_FRAG
-    });
+    this._treeVariants = null;
+    this._treesReady = false;
+    this._treeEnv = {
+      uTime: { value: 0 },
+      uGust: { value: 0.6 },
+      uSunDir: { value: sunDir },
+      uAmbient: { value: this._ambientCol },
+      uSunCol: { value: this._sunLightCol },
+      uFogColor: { value: fogColor },
+      uFogNear: { value: FOG_NEAR },
+      uFogFar: { value: FOG_FAR },
+      materials: []
+    };
+
+    var self = this;
+    loadTreeAssets(THREE, this._treeEnv).then(function (variants) {
+      self._treeVariants = variants;
+      self._treesReady = true;
+    }).catch(function (err) { self._fail(err); });
 
     this._rockGeo = buildRockGeometry(THREE);
     this._rockMat = new THREE.ShaderMaterial({
@@ -452,6 +481,12 @@ export class InfiniteWorld extends HTMLElement {
   }
 
   _processQueue() {
+    if (!this._treesReady) {
+      if (this._loading && this._el.loadtext) {
+        this._el.loadtext.textContent = 'loading tree models\u2026';
+      }
+      return;
+    }
     var budget = this._loading ? 5 : 1;
     while (budget-- > 0 && this._queue.length) {
       var q = this._queue.shift();
@@ -493,8 +528,10 @@ export class InfiniteWorld extends HTMLElement {
     this._scene.remove(chunk.mesh);
     chunk.mesh.geometry.dispose();
     if (chunk.trees) {
-      this._scene.remove(chunk.trees);
-      if (chunk.trees.dispose) chunk.trees.dispose();
+      chunk.trees.forEach(function (inst) {
+        self._scene.remove(inst);
+        inst.dispose();
+      });
     }
     if (chunk.rocks) {
       this._scene.remove(chunk.rocks);
@@ -539,11 +576,32 @@ export class InfiniteWorld extends HTMLElement {
     this._sunLightCol.setRGB(bl(SUN_N, SUN_D, SUN_K, 0, sg), bl(SUN_N, SUN_D, SUN_K, 1, sg), bl(SUN_N, SUN_D, SUN_K, 2, sg));
     this._lightI.value = 0.18 + 0.82 * day;
     this._nightI.value = night;
+
+    this._ambLight.color.copy(this._ambientCol);
+    this._ambLight.intensity = 0.22 + 0.48 * day;
+    this._sunLight.color.copy(this._sunLightCol);
+    this._sunLight.intensity = 0.12 + 1.15 * day;
+    this._sunLight.position.copy(this._sunDir).multiplyScalar(180);
   }
 
   _updateAtmosphere(dt) {
     var t = this._time;
     var cam = this._camera.position;
+
+    this._sunLight.target.position.set(cam.x, cam.y, cam.z);
+    this._sunLight.target.updateMatrixWorld();
+    this._sunLight.position.set(
+      cam.x + this._sunDir.x * 180,
+      cam.y + this._sunDir.y * 180,
+      cam.z + this._sunDir.z * 180
+    );
+    this._sunLight.updateMatrixWorld();
+    this._sunLight.shadow.updateMatrices(this._sunLight);
+
+    var tu = this._terrainMat.uniforms;
+    tu.uShadowMap.value = this._sunLight.shadow.map;
+    tu.uShadowMatrix.value.copy(this._sunLight.shadow.matrix);
+    tu.uShadowMix.value = this._day;
 
     var W = this._weather;
     if (t > W.gustUntil) { W.gustOn = !W.gustOn; W.gustUntil = t + 60 + Math.random() * 1140; }
@@ -559,8 +617,8 @@ export class InfiniteWorld extends HTMLElement {
     var wa = 0.9 + 0.3 * Math.sin(t * 0.05);
     var wx = Math.cos(wa), wz = Math.sin(wa);
 
-    this._treeMat.uniforms.uTime.value = t;
-    this._treeMat.uniforms.uGust.value = 0.15 + 1.8 * gust;
+    this._treeEnv.uTime.value = t;
+    this._treeEnv.uGust.value = 0.15 + 1.8 * gust;
 
     var d = this._wind.data, a = this._wind.attr.array;
     var speed = 13 + 36 * gust;
