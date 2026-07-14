@@ -23,6 +23,7 @@ export var FOG_NEAR = 110;
 export var FOG_FAR = 250;
 export var FOG_COLOR = [0.80, 0.85, 0.90];
 export var SKY_ZENITH = [0.34, 0.50, 0.76];
+// Normalizes and exports the default sun direction vector
 export var SUN = (function () {
   var x = 0.55, y = 0.52, z = 0.30, l = Math.sqrt(x * x + y * y + z * z);
   return [x / l, y / l, z / l];

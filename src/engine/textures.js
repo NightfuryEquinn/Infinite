@@ -1,3 +1,4 @@
+// Creates a radial glow canvas texture for beacon and particle effects
 export function makeGlowTexture(THREE) {
   var c = document.createElement('canvas');
   c.width = c.height = 64;
@@ -11,6 +12,7 @@ export function makeGlowTexture(THREE) {
   return new THREE.CanvasTexture(c);
 }
 
+// Creates a soft radial canvas texture for billboards and sprites
 export function makeSoftTexture(THREE) {
   var c = document.createElement('canvas');
   c.width = c.height = 32;

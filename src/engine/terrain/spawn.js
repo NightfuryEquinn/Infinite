@@ -1,5 +1,6 @@
 import { terrainHeight } from './height.js';
 
+// Searches outward in rings for a flat spawn point between 4m and 16m elevation
 export function findSpawn() {
   for (var r = 0; r <= 1600; r += 28) {
     var steps = Math.max(1, Math.round(r / 20));
@@ -7,8 +8,10 @@ export function findSpawn() {
       var a = (i / steps) * Math.PI * 2;
       var x = Math.cos(a) * r, z = Math.sin(a) * r;
       var h = terrainHeight(x, z);
+
       if (h > 4 && h < 16) return { x: x, z: z };
     }
   }
+
   return { x: 0, z: 0 };
 }

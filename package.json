@@ -12,12 +12,14 @@
     "@react-three/drei": "^10.0.7",
     "@react-three/fiber": "^9.1.2",
     "assimpjs": "^0.0.10",
+    "howler": "^2.2.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.175.0",
     "vercel": "^56.1.0"
   },
   "devDependencies": {
+    "@types/howler": "^2.2.13",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
     "@types/three": "^0.175.0",

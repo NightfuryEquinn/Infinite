@@ -1,8 +1,8 @@
 import * as assimpModule from 'assimpjs';
 import assimpWasm from 'assimpjs/dist/assimpjs.wasm?url';
-import barkUrl from '../../assets/bark_loo.jpg';
-import blattUrl from '../../assets/blatt1.jpg';
-import blattAlphaUrl from '../../assets/blatt1_a.jpg';
+import barkUrl from '../../assets/bark.jpg';
+import blattUrl from '../../assets/leaf.jpg';
+import blattAlphaUrl from '../../assets/leaf_a.jpg';
 import { CHUNK_SIZE, TREE_HEIGHT_SCALE, TREE_MAX_PER_CHUNK } from '../config.js';
 import { fbm, ihash, sstep } from '../noise.js';
 import { terrainHeight, terrainNormalY } from '../terrain/height.js';
@@ -11,7 +11,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 var ASSET_BASE = new URL('../../assets/', import.meta.url).href;
-var TREE1_URL = new URL('../../assets/Tree1.3ds', import.meta.url).href;
+var TREE1_URL = new URL('../../assets/tree.3ds', import.meta.url).href;
 var BIRCH_URL = new URL('../../assets/birch_tree.blend', import.meta.url).href;
 var TARGET_HEIGHT = 11.5 * TREE_HEIGHT_SCALE;
 
@@ -80,71 +80,95 @@ export var TREE_FRAG = [
   '}'
 ].join('\n');
 
+// Normalizes loader input into a standalone ArrayBuffer
 function toArrayBuffer(data) {
   if (data instanceof ArrayBuffer) return data;
+
   if (ArrayBuffer.isView(data)) {
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   }
+
   return data;
 }
 
+// Extracts one geometry group into its own indexed buffer geometry
 function extractGroupGeometry(THREE, geometry, group) {
   var indexAttr = geometry.index;
+
   if (!indexAttr) return geometry.clone();
+
   var indices = [];
+
   for (var i = 0; i < group.count; i++) indices.push(indexAttr.getX(group.start + i));
+
   var pos = geometry.attributes.position;
   var norm = geometry.attributes.normal;
   var uv = geometry.attributes.uv;
   var newPos = [], newNorm = [], newUv = [], newIdx = [];
   var remap = new Map();
+
   for (var j = 0; j < indices.length; j++) {
     var old = indices[j];
+
     if (!remap.has(old)) {
       remap.set(old, remap.size);
       newPos.push(pos.getX(old), pos.getY(old), pos.getZ(old));
+
       if (norm) newNorm.push(norm.getX(old), norm.getY(old), norm.getZ(old));
       if (uv) newUv.push(uv.getX(old), uv.getY(old));
     }
+
     newIdx.push(remap.get(old));
   }
+
   var geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(newPos, 3));
+
   if (newNorm.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(newNorm, 3));
   if (newUv.length) geo.setAttribute('uv', new THREE.Float32BufferAttribute(newUv, 2));
   geo.setIndex(newIdx);
+
   return geo;
 }
 
+// Returns true when a material should be treated as tree foliage
 function isTreeFoliageMaterial(mat, meshMidY) {
   if (!mat) return false;
+
   var name = (mat.name || '').toLowerCase();
+
   if (/leaf|blatt|foliage|green|laub|rinde_leaf/i.test(name)) return true;
   if (/rind|bark|stamm|trunk|rinde_level/i.test(name)) return false;
   if (mat.alphaMap) return true;
   if (mat.color && mat.color.g > mat.color.r * 1.1 && mat.color.g > 0.2) return true;
+
   return meshMidY > 0.35 && (mat.transparent || mat.opacity < 0.99);
 }
 
+// Applies bark and leaf textures to the legacy 3DS tree model
 function applyTree1Textures(THREE, root) {
   var texLoader = new THREE.TextureLoader();
   var barkTex = texLoader.load(barkUrl);
   var leafTex = texLoader.load(blattUrl);
   var leafAlpha = texLoader.load(blattAlphaUrl);
+
   [barkTex, leafTex, leafAlpha].forEach(function (tex) {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
   });
   leafAlpha.colorSpace = THREE.NoColorSpace;
 
+  // Assigns bark or leaf maps to each mesh material
   root.traverse(function (child) {
     if (!child.isMesh) return;
+
     var mats = Array.isArray(child.material) ? child.material : [child.material];
     var meshBox = new THREE.Box3().setFromObject(child);
     var meshMidY = (meshBox.min.y + meshBox.max.y) * 0.5;
 
     mats.forEach(function (mat) {
       if (!mat) return;
+
       if (!mat.color) mat.color = new THREE.Color(0xffffff);
 
       if (isTreeFoliageMaterial(mat, meshMidY)) {
@@ -154,56 +178,72 @@ function applyTree1Textures(THREE, root) {
         mat.map = barkTex;
         mat.alphaMap = null;
       }
+
       mat.color.setHex(0xffffff);
     });
   });
 }
 
+// Initializes the assimpjs WASM module for blend conversion
 async function getAssimp() {
   var factory = assimpModule.default || assimpModule['module.exports'];
+
   if (typeof factory !== 'function') {
     throw new Error('assimpjs failed to load');
   }
+
   return factory({
+    // Resolves assimp WASM and other asset paths
     locateFile: function (path) {
       return path.endsWith('.wasm') ? assimpWasm : path;
     }
   });
 }
 
+// Returns true when a material should be treated as foliage
 function isFoliageMaterial(mat) {
   var name = (mat.name || '').toLowerCase();
+
   if (mat.alphaMap) return true;
   if (/leaf|blatt|foliage|needle|branch|canopy|tree_?l|birch/i.test(name)) return true;
   if (mat.transparent || (mat.opacity != null && mat.opacity < 0.99)) return true;
   if (mat.map && mat.map.image && mat.map.image.width < 256) return true;
+
   return false;
 }
 
+// Rotates the loaded root so its tallest axis becomes vertical
 function orientTreeRoot(THREE, root) {
   root.updateMatrixWorld(true);
   var box = new THREE.Box3().setFromObject(root);
   var size = new THREE.Vector3();
   box.getSize(size);
   var oriented = new THREE.Group();
+
   if (size.z >= size.x && size.z >= size.y) {
     oriented.rotation.x = -Math.PI / 2;
   } else if (size.x >= size.y && size.x >= size.z) {
     oriented.rotation.z = Math.PI / 2;
   }
+
   oriented.add(root);
   oriented.updateMatrixWorld(true);
+
   return oriented;
 }
 
+// Sets default colors and PBR values on a tree material
 function tuneTreeMaterial(THREE, mat) {
   if (!mat.color) mat.color = new THREE.Color(0xffffff);
+
   if (mat.isMeshStandardMaterial) {
     mat.metalness = 0.0;
     mat.roughness = 0.88;
     mat.envMapIntensity = 0.0;
   }
+
   if (mat.isMeshPhongMaterial) mat.shininess = 18;
+
   if (mat.map) {
     mat.map.colorSpace = THREE.SRGBColorSpace;
     mat.map.anisotropy = 4;
@@ -212,10 +252,12 @@ function tuneTreeMaterial(THREE, mat) {
   } else {
     mat.color.setRGB(0.45, 0.34, 0.24);
   }
+
   if (mat.alphaMap) {
     mat.alphaMap.colorSpace = THREE.NoColorSpace;
     mat.alphaMap.anisotropy = 4;
   }
+
   if (isFoliageMaterial(mat)) {
     mat.side = THREE.DoubleSide;
     mat.transparent = true;
@@ -224,16 +266,21 @@ function tuneTreeMaterial(THREE, mat) {
   } else {
     mat.side = THREE.FrontSide;
   }
+
   mat.fog = false;
 }
 
+// Applies wind sway and fog to tree materials via shader hooks
 function attachTreeEffects(THREE, material, env) {
   tuneTreeMaterial(THREE, material);
   var foliage = isFoliageMaterial(material);
   material.fog = false;
   var prev = material.onBeforeCompile;
+
+  // Injects wind sway and distance fog into tree shaders
   material.onBeforeCompile = function (shader) {
     if (prev) prev(shader);
+
     shader.uniforms.uTime = env.uTime;
     shader.uniforms.uGust = env.uGust;
     shader.uniforms.uFogColor = env.uFogColor;
@@ -256,12 +303,14 @@ function attachTreeEffects(THREE, material, env) {
       '#include <common>',
       '#include <common>\nuniform vec3 uFogColor;\nuniform float uFogNear;\nuniform float uFogFar;'
     );
+
     /* three r15x+ renamed output_fragment → opaque_fragment */
     var fogInject = [
       'float treeFog = smoothstep(uFogNear, uFogFar, length(vViewPosition));',
       'gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, treeFog);',
       'if (treeFog > 0.98) discard;'
     ].join('\n');
+
     if (shader.fragmentShader.indexOf('#include <opaque_fragment>') !== -1) {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <opaque_fragment>',
@@ -274,12 +323,16 @@ function attachTreeEffects(THREE, material, env) {
       );
     }
   };
+
+  // Returns a stable cache key for the tree fog shader variant
   material.customProgramCacheKey = function () {
     return 'tree-fog-v2-' + (foliage ? 'foliage' : 'bark') + (material.map ? '-map' : '');
   };
+
   env.materials.push(material);
 }
 
+// Scales and merges tree meshes into instancing-ready parts
 function prepareTreeVariant(THREE, root, env) {
   var wrapper = orientTreeRoot(THREE, root);
   wrapper.updateMatrixWorld(true);
@@ -289,6 +342,7 @@ function prepareTreeVariant(THREE, root, env) {
   var center = new THREE.Vector3();
   box.getSize(size);
   box.getCenter(center);
+
   if (size.y < 0.001) throw new Error('tree model has zero height');
 
   var scale = TARGET_HEIGHT / size.y;
@@ -297,15 +351,22 @@ function prepareTreeVariant(THREE, root, env) {
   wrapper.updateMatrixWorld(true);
 
   var partMap = new Map();
+
+  // Groups mesh geometry by material for instanced rendering
   wrapper.traverse(function (child) {
     if (!child.isMesh) return;
+
     var geom = child.geometry;
     var mats = Array.isArray(child.material) ? child.material : [child.material];
 
+    // Accumulates geometry for one material slot
     function addPart(subGeom, mat) {
       if (!mat || !subGeom) return;
+
       var key = mat.uuid;
+
       if (!partMap.has(key)) partMap.set(key, { material: mat, geometries: [] });
+
       partMap.get(key).geometries.push(subGeom);
     }
 
@@ -313,70 +374,92 @@ function prepareTreeVariant(THREE, root, env) {
       geom.groups.forEach(function (group) {
         var sub = extractGroupGeometry(THREE, geom, group);
         sub.applyMatrix4(child.matrixWorld);
+
         if (!sub.getAttribute('normal')) sub.computeVertexNormals();
+
         addPart(sub, mats[group.materialIndex] || mats[0]);
       });
+
       return;
     }
 
     var single = geom.clone();
     single.applyMatrix4(child.matrixWorld);
+
     if (!single.getAttribute('normal')) single.computeVertexNormals();
+
     addPart(single, mats[0]);
   });
 
   var parts = [];
+
   partMap.forEach(function (entry) {
     var geometry = entry.geometries.length === 1
       ? entry.geometries[0]
       : mergeGeometries(entry.geometries, false);
-    entry.geometries.forEach(function (g) { if (g !== geometry) g.dispose(); });
+
+    entry.geometries.forEach(function (g) {
+      if (g !== geometry) g.dispose();
+    });
+
     attachTreeEffects(THREE, entry.material, env);
     geometry.computeBoundingSphere();
     parts.push({ geometry: geometry, material: entry.material });
   });
 
   var finalBox = new THREE.Box3();
+
   parts.forEach(function (part) {
     part.geometry.computeBoundingBox();
     finalBox.union(part.geometry.boundingBox);
   });
+
   var height = finalBox.max.y - finalBox.min.y;
   var radius = Math.max(finalBox.max.x - finalBox.min.x, finalBox.max.z - finalBox.min.z) * 0.5;
 
   return { parts: parts, height: height, radius: radius };
 }
 
+// Parses a GLB buffer into a glTF scene graph
 function parseGlb(buffer) {
   return new Promise(function (resolve, reject) {
     new GLTFLoader().parse(toArrayBuffer(buffer), '', resolve, reject);
   });
 }
 
+// Converts birch_tree.blend to GLB via assimp and prepares the mesh
 async function loadBlendTree(THREE, env) {
   var ajs = await getAssimp();
   var res = await fetch(BIRCH_URL);
+
   if (!res.ok) throw new Error('failed to fetch birch_tree.blend');
+
   var blend = new Uint8Array(await res.arrayBuffer());
   var fileList = new ajs.FileList();
   fileList.AddFile('birch_tree.blend', blend);
   var result = ajs.ConvertFileList(fileList, 'glb2');
+
   if (!result.IsSuccess() || result.FileCount() === 0) {
     throw new Error('birch_tree.blend conversion failed: ' + result.GetErrorCode());
   }
+
   var glb = result.GetFile(0).GetContent();
   var gltf = await parseGlb(glb);
+
   return prepareTreeVariant(THREE, gltf.scene, env);
 }
 
+// Loads the legacy 3DS tree model and applies textures
 async function load3DSTree(THREE, env) {
   var loader = new TDSLoader();
   loader.setResourcePath(ASSET_BASE);
   var root = await loader.loadAsync(TREE1_URL);
   applyTree1Textures(THREE, root);
+
   return prepareTreeVariant(THREE, root, env);
 }
 
+// Loads all tree model variants, tolerating individual failures
 export async function loadTreeAssets(THREE, env) {
   env.materials = env.materials || [];
   var results = await Promise.allSettled([
@@ -384,37 +467,47 @@ export async function loadTreeAssets(THREE, env) {
     loadBlendTree(THREE, env)
   ]);
   var variants = [];
+
   results.forEach(function (result, i) {
     if (result.status === 'fulfilled') {
       variants.push(result.value);
       return;
     }
+
     console.warn('[trees] failed to load variant ' + i + ':', result.reason);
   });
+
   if (!variants.length) throw new Error('no tree models could be loaded');
+
   return variants;
 }
 
+// Places instanced trees in forested terrain for a chunk
 export function spawnTrees(chunk, ctx) {
   var THREE = ctx.THREE;
   var variants = ctx.treeVariants;
+
   if (!variants || !variants.length) return;
 
   var cx = chunk.cx, cz = chunk.cz;
   var forest = fbm(cx * 0.13 + 5.2, cz * 0.13 - 3.1, 2);
   var maxTrees = Math.round(sstep(0.50, 0.82, forest) * TREE_MAX_PER_CHUNK);
+
   if (!maxTrees) return;
 
   var dummy = new THREE.Object3D();
   var placements = [];
+
   for (var i = 0; i < maxTrees; i++) {
     var rx = ihash(cx * 53 + i * 17 + 1, cz * 97 - i * 29 + 3);
     var rz = ihash(cx * 71 - i * 23 + 9, cz * 41 + i * 13 - 5);
     var x = (cx + 0.04 + rx * 0.92) * CHUNK_SIZE;
     var z = (cz + 0.04 + rz * 0.92) * CHUNK_SIZE;
     var h = terrainHeight(x, z);
+
     if (h < 2.8 || h > 22) continue;
     if (terrainNormalY(x, z) < 0.78) continue;
+
     var s = 0.75 + ihash(i * 7 + 11, (cx * 13) ^ cz) * 0.8;
     var variant = Math.floor(ihash(cx * 29 + i * 41 + 7, cz * 37 - i * 19 + 3) * variants.length);
     dummy.position.set(x, h - 0.15, z);
@@ -428,6 +521,7 @@ export function spawnTrees(chunk, ctx) {
       heightMul: 0.9 + rx * 0.4,
       h: h
     });
+
     var v = variants[variant];
     chunk.colliders.push({
       x: x,
@@ -436,17 +530,23 @@ export function spawnTrees(chunk, ctx) {
       top: h + v.height * s * (0.9 + rx * 0.4)
     });
   }
+
   if (!placements.length) return;
 
   var instanced = [];
+
   for (var vi = 0; vi < variants.length; vi++) {
     var partPlacements = placements.filter(function (p) { return p.variant === vi; });
+
     if (!partPlacements.length) continue;
+
     variants[vi].parts.forEach(function (part) {
       var inst = new THREE.InstancedMesh(part.geometry, part.material, partPlacements.length);
+
       for (var m = 0; m < partPlacements.length; m++) {
         inst.setMatrixAt(m, partPlacements[m].matrix);
       }
+
       inst.instanceMatrix.needsUpdate = true;
       inst.computeBoundingSphere();
       /* Keep shadow casters in the shadow pass — ortho frustum differs from camera frustum. */
@@ -457,5 +557,6 @@ export function spawnTrees(chunk, ctx) {
       instanced.push(inst);
     });
   }
+
   chunk.trees = instanced;
 }

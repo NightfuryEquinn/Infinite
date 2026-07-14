@@ -22,8 +22,12 @@ import { terrainHeight, terrainNormalY } from './terrain/height.js';
 import { findSpawn } from './terrain/spawn.js';
 import { TERRAIN_FRAG, TERRAIN_VERT } from './terrain/shaders.js';
 import { hudHTML } from './ui/hud.js';
+import { Howl } from 'howler';
+import musicUrl from '../assets/a-drifting-lens-amos-roddy.mp3';
 
+// Custom element that owns the infinite world explorer (UI, chunks, render loop)
 export class InfiniteWorld extends HTMLElement {
+  // Mounts the world UI, state, and WebGL bootstrap when added to the DOM
   connectedCallback() {
     if (this._inited) return;
     this._inited = true;
@@ -45,14 +49,16 @@ export class InfiniteWorld extends HTMLElement {
     hud.innerHTML = hudHTML();
     root.appendChild(hud);
     this._el = {};
+    // Caches HUD element references by data attribute name
     ['cross', 'fps', 'clock', 'disc', 'map', 'biome', 'pos', 'speed', 'speedbar', 'hint',
       'stats', 'popup', 'popup-kicker', 'popup-name', 'popup-lore', 'popup-action',
       'start', 'start-title', 'start-sub', 'loading', 'loadbar', 'loadtext',
       'mobile', 'mobile-settings', 'mobile-panel', 'stick-zone', 'stick-base', 'stick-knob',
-      'actions', 'btn-sprint', 'btn-jump', 'handed-right', 'handed-left'].forEach(function (k) {
+      'actions', 'btn-sprint', 'btn-jump', 'handed-right', 'handed-left', 'music'].forEach(function (k) {
         self._el[k.replace(/-/g, '_')] = hud.querySelector('[data-' + k + ']');
       });
     this._el.start.style.pointerEvents = 'auto';
+    this._el.music.style.pointerEvents = 'auto';
 
     this._chunks = new Map();
     this._queue = [];
@@ -96,34 +102,58 @@ export class InfiniteWorld extends HTMLElement {
     };
     this._discovered = new Set();
     this._handed = 'right';
+    this._musicOn = true;
+    this._music = null;
     this._isMobile = this._detectMobile();
+
     try {
       var saved = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+      // Restores previously discovered beacon ids from local storage
       if (Array.isArray(saved)) saved.forEach(function (id) { self._discovered.add(id); });
     } catch (e) { /* ignore */ }
+
     try {
       var settings = JSON.parse(localStorage.getItem(SETTINGS_LS_KEY) || '{}');
       if (settings && (settings.handed === 'left' || settings.handed === 'right')) {
         this._handed = settings.handed;
       }
+      if (settings && typeof settings.music === 'boolean') {
+        this._musicOn = settings.music;
+      }
     } catch (e) { /* ignore */ }
 
+    this._initMusic();
+    this._syncMusicButton();
+
+    // Loads Three.js then initializes the scene or reports failure
     loadThree().then(function (THREE) {
       try { self._init(THREE); } catch (err) { self._fail(err); }
     }).catch(function (err) { self._fail(err); });
   }
 
+  // Tears down animation, listeners, chunks, and renderer when removed
   disconnectedCallback() {
     var self = this;
     if (this._raf) cancelAnimationFrame(this._raf);
     if (this._resizeObs) this._resizeObs.disconnect();
+
+    if (this._music) {
+      this._music.stop();
+      this._music.unload();
+      this._music = null;
+    }
+
+    // Runs all stored event unbinders
     (this._unbinders || []).forEach(function (fn) { fn(); });
+
+    // Disposes every loaded chunk mesh and spawned content
     if (this._chunks) this._chunks.forEach(function (c) { self._disposeChunk(c); });
     if (this._renderer) this._renderer.dispose();
     this.innerHTML = '';
     this._inited = false;
   }
 
+  // Shows a load-screen error when startup fails
   _fail(err) {
     console.error('[infinite-world]', err);
     if (this._el && this._el.loadtext) {
@@ -132,6 +162,7 @@ export class InfiniteWorld extends HTMLElement {
     }
   }
 
+  // Builds the shared context object passed to chunk spawners
   _spawnCtx() {
     return {
       THREE: this._THREE,
@@ -146,6 +177,7 @@ export class InfiniteWorld extends HTMLElement {
     };
   }
 
+  // Creates renderer, scene, lighting, water, particles, and starts the loop
   _init(THREE) {
     var self = this;
     this._THREE = THREE;
@@ -216,6 +248,7 @@ export class InfiniteWorld extends HTMLElement {
       vertexShader: TERRAIN_VERT,
       fragmentShader: TERRAIN_FRAG
     });
+    // Binds shadow map uniforms before each terrain draw
     this._terrainMat.onBeforeRender = function () {
       var light = self._sunLight;
       var shadow = light.shadow;
@@ -319,12 +352,13 @@ export class InfiniteWorld extends HTMLElement {
       materials: []
     };
 
-    var self = this;
+    // Stores loaded tree variants when assets finish loading
     loadTreeAssets(THREE, this._treeEnv).then(function (variants) {
       self._treeVariants = variants;
       self._treesReady = true;
     }).catch(function (err) { self._fail(err); });
 
+    // Stores loaded rock asset when assets finish loading
     loadRockAssets(THREE, this._rockEnv).then(function (asset) {
       self._rockAsset = asset;
       self._rocksReady = true;
@@ -377,11 +411,15 @@ export class InfiniteWorld extends HTMLElement {
     this._raf = requestAnimationFrame(this._tick);
   }
 
+  // Registers keyboard, mouse, touch, and resize listeners with cleanup hooks
   _bindEvents() {
     var self = this;
     var unbind = this._unbinders = [];
+
+    // Adds a listener and records an unbinder for teardown
     function on(target, ev, fn, opts) {
       target.addEventListener(ev, fn, opts);
+      // Removes this listener when the world disconnects
       unbind.push(function () { target.removeEventListener(ev, fn, opts); });
     }
 
@@ -390,16 +428,22 @@ export class InfiniteWorld extends HTMLElement {
       KeyA: 'a', ArrowLeft: 'a', KeyD: 'd', ArrowRight: 'd',
       ShiftLeft: 'shift', ShiftRight: 'shift'
     };
+
+    // Tracks movement keys and handles discover/jump shortcuts
     on(window, 'keydown', function (e) {
       var k = KEYMAP[e.code];
       if (k) { self._keys[k] = true; e.preventDefault(); }
       if (e.code === 'KeyE') self._tryDiscover();
       if (e.code === 'Space') { e.preventDefault(); self._jump(); }
     });
+
+    // Clears movement keys when they are released
     on(window, 'keyup', function (e) {
       var k = KEYMAP[e.code];
       if (k) self._keys[k] = false;
     });
+
+    // Resets input state when the window loses focus
     on(window, 'blur', function () {
       self._keys = {};
       self._dragging = false;
@@ -407,21 +451,30 @@ export class InfiniteWorld extends HTMLElement {
       self._resetStick();
       self._lookPointerId = null;
       self._lookLast = null;
+
       if (self._el.btn_sprint) {
         self._el.btn_sprint.style.background = 'rgba(8,13,20,.55)';
         self._el.btn_sprint.style.borderColor = 'rgba(255,255,255,.12)';
-      }    });
+      }
+    });
 
+    // Requests pointer lock or falls back to drag look
     function tryLock() {
       if (self._isMobile || self._dragLook) return;
+
       try {
         var p = self._canvas.requestPointerLock && self._canvas.requestPointerLock();
+        // Falls back to drag look when pointer lock is rejected
         if (p && p.catch) p.catch(function () { self._enableDragLook(); });
+
+        // Enables drag look if pointer lock never activates
         setTimeout(function () {
           if (document.pointerLockElement !== self._canvas && !self._dragLook) self._enableDragLook();
         }, 350);
       } catch (e) { self._enableDragLook(); }
     }
+
+    // Starts play with drag look on mobile or pointer lock on desktop
     on(this._el.start, 'click', function () {
       if (self._isMobile) {
         self._enableDragLook();
@@ -429,28 +482,45 @@ export class InfiniteWorld extends HTMLElement {
       } else {
         tryLock();
       }
+      self._startMusicIfEnabled();
     });
+
+    // Toggles background music on or off
+    on(this._el.music, 'click', function (e) {
+      self._toggleMusic();
+      e.stopPropagation();
+    });
+
+    // Re-attempts pointer lock when clicking the canvas
     on(this._canvas, 'click', function () {
       if (!self._dragLook && document.pointerLockElement !== self._canvas) tryLock();
     });
+
+    // Syncs look-active UI with pointer lock state
     on(document, 'pointerlockchange', function () {
       var locked = document.pointerLockElement === self._canvas;
       self._setLookActive(locked || self._dragLook);
     });
+
+    // Applies mouse look from pointer lock or drag mode
     on(document, 'mousemove', function (e) {
       var locked = document.pointerLockElement === self._canvas;
       if (locked || (self._dragLook && self._dragging && self._lookPointerId == null)) {
         self._applyLookDelta(e.movementX || 0, e.movementY || 0);
       }
     });
+
+    // Begins drag look on mouse down when drag mode is active
     on(this._canvas, 'mousedown', function (e) {
       if (self._dragLook && e.button === 0 && self._lookPointerId == null) self._dragging = true;
     });
+
+    // Ends drag look on mouse up when not using touch pointers
     on(window, 'mouseup', function () {
       if (self._lookPointerId == null) self._dragging = false;
     });
 
-    /* Touch / pointer look (mobile drag across canvas) */
+    // Starts touch/pointer look tracking on the canvas
     on(this._canvas, 'pointerdown', function (e) {
       if (!self._dragLook || e.pointerType === 'mouse') return;
       if (self._lookPointerId != null) return;
@@ -460,6 +530,8 @@ export class InfiniteWorld extends HTMLElement {
       try { self._canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       e.preventDefault();
     });
+
+    // Applies touch/pointer look deltas while dragging
     on(this._canvas, 'pointermove', function (e) {
       if (e.pointerId !== self._lookPointerId || !self._lookLast) return;
       var dx = e.clientX - self._lookLast.x;
@@ -468,6 +540,8 @@ export class InfiniteWorld extends HTMLElement {
       self._applyLookDelta(dx, dy);
       e.preventDefault();
     });
+
+    // Clears touch/pointer look state when the gesture ends
     function endLookPointer(e) {
       if (e.pointerId !== self._lookPointerId) return;
       self._lookPointerId = null;
@@ -480,19 +554,23 @@ export class InfiniteWorld extends HTMLElement {
     this._setupMobileControls(on);
     if (this._isMobile) this._enableDragLook();
 
+    // Keeps renderer size in sync with element layout changes
     this._resizeObs = new ResizeObserver(function () { self._resize(); });
     this._resizeObs.observe(this);
   }
 
+  // Returns true when coarse pointer or small touch viewport is detected
   _detectMobile() {
     try {
       if (window.matchMedia('(pointer: coarse)').matches) return true;
       if (window.matchMedia('(hover: none)').matches && (navigator.maxTouchPoints || 0) > 0) return true;
     } catch (e) { /* ignore */ }
+
     return (navigator.maxTouchPoints || 0) > 0 &&
       Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 900;
   }
 
+  // Applies horizontal and vertical look deltas with pitch clamping
   _applyLookDelta(dx, dy) {
     this._yaw -= dx * 0.0023;
     this._pitch -= dy * 0.0021;
@@ -501,6 +579,7 @@ export class InfiniteWorld extends HTMLElement {
     if (this._pitch < -lim) this._pitch = -lim;
   }
 
+  // Wires virtual stick, sprint, jump, settings, and popup controls
   _setupMobileControls(on) {
     var self = this;
     if (!this._isMobile) return;
@@ -519,6 +598,7 @@ export class InfiniteWorld extends HTMLElement {
     var knob = this._el.stick_knob;
     var maxR = 40;
 
+    // Positions the stick knob and stores normalized stick input
     function setStickFromEvent(e) {
       var rect = zone.getBoundingClientRect();
       var cx = rect.left + rect.width * 0.5;
@@ -534,6 +614,7 @@ export class InfiniteWorld extends HTMLElement {
       self._stick.y = ny / maxR;
     }
 
+    // Begins virtual stick tracking on touch down
     on(zone, 'pointerdown', function (e) {
       if (self._stickPointerId != null) return;
       self._stickPointerId = e.pointerId;
@@ -542,11 +623,15 @@ export class InfiniteWorld extends HTMLElement {
       e.preventDefault();
       e.stopPropagation();
     });
+
+    // Updates virtual stick position while dragging
     on(zone, 'pointermove', function (e) {
       if (e.pointerId !== self._stickPointerId) return;
       setStickFromEvent(e);
       e.preventDefault();
     });
+
+    // Resets stick input when the touch gesture ends
     function endStick(e) {
       if (e.pointerId !== self._stickPointerId) return;
       self._stickPointerId = null;
@@ -557,44 +642,63 @@ export class InfiniteWorld extends HTMLElement {
 
     var sprint = this._el.btn_sprint;
     var jump = this._el.btn_jump;
+
+    // Updates mobile sprint state and button styling
     function setSprint(on) {
       self._mobileSprint = on;
       sprint.style.background = on ? 'rgba(143,216,255,.38)' : 'rgba(8,13,20,.55)';
       sprint.style.borderColor = on ? 'rgba(143,216,255,.65)' : 'rgba(255,255,255,.12)';
     }
+
+    // Enables sprint while the sprint button is held
     on(sprint, 'pointerdown', function (e) {
       setSprint(true);
       e.preventDefault();
       e.stopPropagation();
     });
+    // Disables sprint when the sprint button is released
     on(sprint, 'pointerup', function (e) { setSprint(false); e.preventDefault(); });
+    // Disables sprint when the sprint touch is cancelled
     on(sprint, 'pointercancel', function () { setSprint(false); });
+    // Disables sprint when the finger leaves the sprint button
     on(sprint, 'pointerleave', function (e) {
       if (e.buttons === 0) setSprint(false);
     });
+
+    // Triggers jump and button press feedback on touch down
     on(jump, 'pointerdown', function (e) {
       self._jump();
       jump.style.transform = 'scale(0.94)';
       e.preventDefault();
       e.stopPropagation();
     });
+    // Restores jump button styling when touch ends
     on(jump, 'pointerup', function () { jump.style.transform = ''; });
     on(jump, 'pointercancel', function () { jump.style.transform = ''; });
 
+    // Toggles the mobile settings panel visibility
     on(this._el.mobile_settings, 'click', function (e) {
       self._settingsOpen = !self._settingsOpen;
       self._el.mobile_panel.style.display = self._settingsOpen ? 'block' : 'none';
       e.stopPropagation();
     });
+
+    // Switches controls to right-handed layout
     on(this._el.handed_right, 'click', function (e) {
       self._setHandedness('right');
       e.stopPropagation();
     });
+
+    // Switches controls to left-handed layout
     on(this._el.handed_left, 'click', function (e) {
       self._setHandedness('left');
       e.stopPropagation();
     });
+
+    // Prevents settings panel clicks from closing the panel
     on(this._el.mobile_panel, 'click', function (e) { e.stopPropagation(); });
+
+    // Closes the settings panel when tapping outside it
     on(this._root, 'pointerdown', function (e) {
       if (!self._settingsOpen) return;
       if (e.target.closest && (e.target.closest('[data-mobile-panel]') || e.target.closest('[data-mobile-settings]'))) {
@@ -603,27 +707,95 @@ export class InfiniteWorld extends HTMLElement {
       self._settingsOpen = false;
       self._el.mobile_panel.style.display = 'none';
     });
+
+    // Discovers the active beacon when the popup is tapped on mobile
     on(this._el.popup, 'click', function (e) {
       self._tryDiscover();
       e.stopPropagation();
     });
   }
 
+  // Clears virtual stick input and recenters the knob
   _resetStick() {
     this._stick.x = 0;
     this._stick.y = 0;
     if (this._el.stick_knob) this._el.stick_knob.style.transform = 'translate(0px,0px)';
   }
 
+  // Saves left/right control layout preference to local storage
   _setHandedness(handed) {
     if (handed !== 'left' && handed !== 'right') return;
     this._handed = handed;
     this._applyHandedness();
+    this._saveSettings();
+  }
+
+  // Writes handedness and music preferences to local storage
+  _saveSettings() {
     try {
-      localStorage.setItem(SETTINGS_LS_KEY, JSON.stringify({ handed: handed }));
+      localStorage.setItem(SETTINGS_LS_KEY, JSON.stringify({
+        handed: this._handed,
+        music: this._musicOn
+      }));
     } catch (e) { /* ignore */ }
   }
 
+  // Creates the looping Howler soundtrack instance
+  _initMusic() {
+    this._music = new Howl({
+      src: [musicUrl],
+      loop: true,
+      volume: 0.45,
+      html5: true,
+      preload: true
+    });
+  }
+
+  // Updates music button pressed state and highlight styling
+  _syncMusicButton() {
+    var btn = this._el && this._el.music;
+    if (!btn) return;
+
+    var on = this._musicOn;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.setAttribute('aria-label', on ? 'Mute music' : 'Play music');
+    btn.style.color = on ? 'rgba(143,216,255,.95)' : 'rgba(255,255,255,.55)';
+    btn.style.background = on ? 'rgba(143,216,255,.22)' : 'rgba(8,13,20,.55)';
+    btn.style.borderColor = on ? 'rgba(143,216,255,.45)' : 'rgba(255,255,255,.12)';
+  }
+
+  // Begins playback when music is enabled and not already playing
+  _startMusicIfEnabled() {
+    if (!this._musicOn || !this._music) return;
+    if (this._music.playing()) return;
+
+    try {
+      this._music.play();
+    } catch (e) { /* ignore autoplay blocks */ }
+
+    this._syncMusicButton();
+  }
+
+  // Toggles music preference and play/pause state
+  _toggleMusic() {
+    this._musicOn = !this._musicOn;
+    this._saveSettings();
+
+    if (!this._music) {
+      this._syncMusicButton();
+      return;
+    }
+
+    if (this._musicOn) {
+      if (!this._music.playing()) this._music.play();
+    } else if (this._music.playing()) {
+      this._music.pause();
+    }
+
+    this._syncMusicButton();
+  }
+
+  // Mirrors stick and action buttons for left- or right-handed layout
   _applyHandedness() {
     var left = this._handed === 'left';
     var stick = this._el.stick_zone;
@@ -643,21 +815,26 @@ export class InfiniteWorld extends HTMLElement {
     this._el.handed_left.style.borderColor = left ? activeBorder : idleBorder;
   }
 
+  // Switches to drag-based look and updates on-screen hints
   _enableDragLook() {
     this._dragLook = true;
+
     if (this._isMobile) {
       this._el.hint.style.display = 'none';
     } else {
       this._el.hint.textContent = 'WASD move \u00b7 DRAG look \u00b7 SPACE double-jump \u00b7 SHIFT sprint \u00b7 E discover';
     }
+
     this._setLookActive(true);
   }
 
+  // Toggles start overlay and crosshair based on active look state
   _setLookActive(active) {
     this._el.start.style.display = active || this._loading ? 'none' : 'flex';
     this._el.cross.style.opacity = active ? '1' : '0';
   }
 
+  // Resizes renderer and camera to match the element dimensions
   _resize() {
     if (!this._renderer) return;
     var w = this.clientWidth || 1, h = this.clientHeight || 1;
@@ -667,8 +844,10 @@ export class InfiniteWorld extends HTMLElement {
     this._camera.updateProjectionMatrix();
   }
 
+  // Returns the string key for a chunk coordinate pair
   _chunkKey(cx, cz) { return cx + ',' + cz; }
 
+  // Queues nearby chunks for build and unloads distant ones
   _updateChunks() {
     var cam = this._camera.position;
     var ccx = Math.floor(cam.x / CHUNK_SIZE);
@@ -689,6 +868,8 @@ export class InfiniteWorld extends HTMLElement {
         }
       }
     }
+
+    // Builds nearest missing chunks first
     want.sort(function (a, b) { return a.d2 - b.d2; });
     for (var i = 0; i < want.length; i++) {
       this._queue.push(want[i]);
@@ -697,15 +878,19 @@ export class InfiniteWorld extends HTMLElement {
 
     var UR2 = UNLOAD_RADIUS * UNLOAD_RADIUS;
     var toRemove = [];
+    // Collects chunks that are outside the unload radius
     this._chunks.forEach(function (chunk, key) {
       var ddx = chunk.cx - ccx, ddz = chunk.cz - ccz;
       if (ddx * ddx + ddz * ddz > UR2) toRemove.push(key);
     });
+
     for (var r = 0; r < toRemove.length; r++) {
       this._disposeChunk(this._chunks.get(toRemove[r]));
       this._chunks.delete(toRemove[r]);
     }
+
     var self = this;
+    // Drops queued chunks that moved outside the unload radius
     this._queue = this._queue.filter(function (q) {
       var ddx = q.cx - ccx, ddz = q.cz - ccz;
       if (ddx * ddx + ddz * ddz > UR2) { self._queued.delete(q.key); return false; }
@@ -713,6 +898,7 @@ export class InfiniteWorld extends HTMLElement {
     });
   }
 
+  // Builds queued chunks within the per-frame budget and updates loading UI
   _processQueue() {
     if (!this._treesReady || !this._rocksReady) {
       if (this._loading && this._el.loadtext) {
@@ -722,6 +908,7 @@ export class InfiniteWorld extends HTMLElement {
       }
       return;
     }
+
     var budget = this._loading ? 5 : 1;
     while (budget-- > 0 && this._queue.length) {
       var q = this._queue.shift();
@@ -731,6 +918,7 @@ export class InfiniteWorld extends HTMLElement {
         this._built++;
       }
     }
+
     if (this._loading) {
       var total = this._built + this._queue.length;
       var pct = total ? Math.round((this._built / total) * 100) : 0;
@@ -740,14 +928,18 @@ export class InfiniteWorld extends HTMLElement {
     }
   }
 
+  // Hides the loading overlay once initial terrain generation completes
   _finishLoading() {
     var self = this;
     this._loading = false;
     this._el.loading.style.opacity = '0';
+
+    // Hides the loading overlay after the fade-out delay
     setTimeout(function () { self._el.loading.style.display = 'none'; }, 650);
     this._setLookActive(this._dragLook || document.pointerLockElement === this._canvas);
   }
 
+  // Builds terrain mesh and spawns trees, rocks, and beacons for one chunk
   _buildChunk(cx, cz) {
     var chunk = buildChunkMesh(cx, cz, this._THREE, this._terrainMat);
     this._scene.add(chunk.mesh);
@@ -758,20 +950,26 @@ export class InfiniteWorld extends HTMLElement {
     return chunk;
   }
 
+  // Removes chunk meshes, instances, and beacon objects from the scene
   _disposeChunk(chunk) {
     var self = this;
     this._scene.remove(chunk.mesh);
     chunk.mesh.geometry.dispose();
+
     if (chunk.trees) {
+      // Removes instanced tree meshes from the scene
       chunk.trees.forEach(function (inst) {
         self._scene.remove(inst);
         inst.dispose();
       });
     }
+
     if (chunk.rocks) {
       this._scene.remove(chunk.rocks);
       if (chunk.rocks.dispose) chunk.rocks.dispose();
     }
+
+    // Disposes beacon meshes and sprites owned by the chunk
     chunk.beacons.forEach(function (b) {
       self._scene.remove(b.mesh);
       self._scene.remove(b.sprite);
@@ -781,6 +979,7 @@ export class InfiniteWorld extends HTMLElement {
     });
   }
 
+  // Advances sun position and blends day/night lighting colors
   _updateDayNight() {
     var dayT = (0.32 + this._time / DAY_LENGTH) % 1;
     this._dayT = dayT;
@@ -796,14 +995,17 @@ export class InfiniteWorld extends HTMLElement {
     if (sunY > -0.04) this._sunDir.set(sunX, Math.max(sunY, 0.06), 0.35).normalize();
     else this._sunDir.set(-sunX, Math.max(-sunY, 0.06), -0.3).normalize();
 
+    // Blends one RGB channel between night, day, and dusk colors
     function bl(nightC, dayC, duskC, i, ga) {
       var v = nightC[i] + (dayC[i] - nightC[i]) * day;
       return v + (duskC[i] - v) * ga;
     }
+
     var FOG_N = [0.04, 0.06, 0.11], FOG_D = FOG_COLOR, FOG_K = [0.82, 0.58, 0.45];
     var ZEN_N = [0.012, 0.02, 0.055], ZEN_D = SKY_ZENITH, ZEN_K = [0.28, 0.27, 0.47];
     var AMB_N = [0.085, 0.11, 0.19], AMB_D = [0.36, 0.41, 0.50], AMB_K = [0.30, 0.26, 0.30];
     var SUN_N = [0.10, 0.14, 0.24], SUN_D = [0.95, 0.88, 0.76], SUN_K = [1.0, 0.45, 0.24];
+
     this._fogColor.setRGB(bl(FOG_N, FOG_D, FOG_K, 0, glow), bl(FOG_N, FOG_D, FOG_K, 1, glow), bl(FOG_N, FOG_D, FOG_K, 2, glow));
     this._zenithCol.setRGB(bl(ZEN_N, ZEN_D, ZEN_K, 0, glow * 0.6), bl(ZEN_N, ZEN_D, ZEN_K, 1, glow * 0.6), bl(ZEN_N, ZEN_D, ZEN_K, 2, glow * 0.6));
     this._ambientCol.setRGB(bl(AMB_N, AMB_D, AMB_K, 0, glow * 0.5), bl(AMB_N, AMB_D, AMB_K, 1, glow * 0.5), bl(AMB_N, AMB_D, AMB_K, 2, glow * 0.5));
@@ -818,12 +1020,13 @@ export class InfiniteWorld extends HTMLElement {
     this._sunLight.intensity = 0.12 + 1.15 * day;
   }
 
+  // Updates shadows, wind streaks, gust, and snow particle effects
   _updateAtmosphere(dt) {
     var t = this._time;
     var cam = this._camera.position;
 
-    /* Keep the shadow volume centered on the player so received shadows track movement.
-       Snap to shadow-map texels to reduce swimming as the camera moves. */
+    // Keep the shadow volume centered on the player so received shadows track movement.
+    // Snap to shadow-map texels to reduce swimming as the camera moves.
     var lift = 40;
     var texel = (SHADOW_EXTENT * 2) / SHADOW_MAP_SIZE;
     var tx = Math.round(cam.x / texel) * texel;
@@ -873,6 +1076,7 @@ export class InfiniteWorld extends HTMLElement {
       a[p6 + 3] = d[o] + wx * len; a[p6 + 4] = d[o + 1]; a[p6 + 5] = d[o + 2] + wz * len;
     }
     this._wind.attr.needsUpdate = true;
+
     var wm = this._wind.line.material;
     wm.opacity += ((0.04 + 0.26 * gust) - wm.opacity) * Math.min(1, dt * 2);
 
@@ -880,12 +1084,14 @@ export class InfiniteWorld extends HTMLElement {
     sm.color.setScalar(0.5 + 0.5 * this._day);
     var tgt = sstep(24, 32, this._groundH) * 0.85 * W.snowLevel;
     sm.opacity += (tgt - sm.opacity) * Math.min(1, dt * 1.6);
+
     if (sm.opacity < 0.02) {
       this._snow.pts.visible = false;
     } else {
       this._snow.pts.visible = true;
       var sp = this._snow.attr.array;
       var drift = 2 + 7 * gust;
+
       for (var j = 0; j < SNOW_N; j++) {
         var k = j * 3;
         sp[k + 1] -= (3.0 + (j % 9) * 0.4) * dt;
@@ -899,10 +1105,13 @@ export class InfiniteWorld extends HTMLElement {
     }
   }
 
+  // Animates nearby beacons and updates the discovery popup
   _updateBeacons(dt) {
     var cam = this._camera.position;
     var nearest = null, nearestD2 = 16 * 16;
     var t = this._time;
+
+    // Animates nearby beacons and tracks the closest one
     this._beacons.forEach(function (b) {
       var dx = b.x - cam.x, dz = b.z - cam.z;
       var d2 = dx * dx + dz * dz;
@@ -939,6 +1148,7 @@ export class InfiniteWorld extends HTMLElement {
     }
   }
 
+  // Marks the active popup beacon as discovered and persists progress
   _tryDiscover() {
     var b = this._popupBeacon;
     if (!b || b.discovered) return;
@@ -946,14 +1156,18 @@ export class InfiniteWorld extends HTMLElement {
     b.mesh.material.uniforms.uDim.value = 1;
     b.sprite.material.opacity = 0.18;
     this._discovered.add(b.id);
+
     try { localStorage.setItem(LS_KEY, JSON.stringify(Array.from(this._discovered))); } catch (e) { /* ignore */ }
+
     this._el.disc.textContent = '\u25c6 ' + this._discovered.size + ' discovered';
     this._el.popup_action.textContent = '\u2713 DISCOVERED';
     this._el.popup_action.style.color = 'rgba(255,255,255,.5)';
   }
 
+  // Applies ground jump or double-jump when space is pressed
   _jump() {
     if (this._loading) return;
+
     if (!this._airborne) {
       this._airborne = true;
       this._vy = JUMP_V;
@@ -964,18 +1178,21 @@ export class InfiniteWorld extends HTMLElement {
     }
   }
 
+  // Integrates player movement, gravity, slope speed, and camera orientation
   _updateMovement(dt) {
     var cam = this._camera.position;
     var fwd = (this._keys.w ? 1 : 0) - (this._keys.s ? 1 : 0) - this._stick.y;
     var str = (this._keys.d ? 1 : 0) - (this._keys.a ? 1 : 0) + this._stick.x;
     var mag = Math.sqrt(fwd * fwd + str * str);
     if (mag > 1) { fwd /= mag; str /= mag; }
+
     var yaw = this._yaw;
     var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     var rx = Math.cos(yaw), rz = -Math.sin(yaw);
     var wx = fx * fwd + rx * str, wz = fz * fwd + rz * str;
     var wl = Math.sqrt(wx * wx + wz * wz);
     var speed = (this._keys.shift || this._mobileSprint) ? SPRINT_SPEED : WALK_SPEED;
+
     if (wl > 0) {
       var ux = wx / wl, uz = wz / wl;
       var hAhead = terrainHeight(cam.x + ux * 3.5, cam.z + uz * 3.5);
@@ -999,6 +1216,7 @@ export class InfiniteWorld extends HTMLElement {
     var ground = Math.max(terrainHeight(cam.x, cam.z), SEA_LEVEL - 0.4);
     this._groundH = ground;
     var targetY = ground + EYE_HEIGHT;
+
     if (this._airborne) {
       this._vy -= GRAVITY * dt;
       this._camY += this._vy * dt;
@@ -1011,21 +1229,24 @@ export class InfiniteWorld extends HTMLElement {
     } else {
       this._camY += (targetY - this._camY) * (1 - Math.exp(-9 * dt));
     }
-    cam.y = this._camY;
 
+    cam.y = this._camY;
     this._camera.rotation.y = this._yaw;
     this._camera.rotation.x = this._pitch;
     this._speed = Math.sqrt(this._vel.x * this._vel.x + this._vel.z * this._vel.z);
   }
 
+  // Pushes the camera out of nearby tree and rock colliders
   _resolveCollisions(cam) {
     var PR = 0.5;
     var ccx = Math.floor(cam.x / CHUNK_SIZE), ccz = Math.floor(cam.z / CHUNK_SIZE);
     var feet = this._camY - EYE_HEIGHT;
+
     for (var dz = -1; dz <= 1; dz++) {
       for (var dx = -1; dx <= 1; dx++) {
         var ch = this._chunks.get(this._chunkKey(ccx + dx, ccz + dz));
         if (!ch || !ch.colliders.length) continue;
+
         for (var i = 0; i < ch.colliders.length; i++) {
           var c = ch.colliders[i];
           var ox = cam.x - c.x, oz = cam.z - c.z;
@@ -1033,6 +1254,7 @@ export class InfiniteWorld extends HTMLElement {
           var d2 = ox * ox + oz * oz;
           if (d2 >= rr * rr || d2 < 1e-8) continue;
           if (feet > c.top - 0.4) continue;
+
           var dd = Math.sqrt(d2);
           var push = (rr - dd) / dd;
           cam.x += ox * push;
@@ -1047,6 +1269,7 @@ export class InfiniteWorld extends HTMLElement {
     }
   }
 
+  // Refreshes position, speed, biome, discovery count, and clock HUD fields
   _updateHUD() {
     var cam = this._camera.position;
     this._el.pos.textContent = Math.round(cam.x) + ', ' + Math.round(cam.z);
@@ -1055,17 +1278,20 @@ export class InfiniteWorld extends HTMLElement {
     var h = terrainHeight(cam.x, cam.z);
     this._el.biome.textContent = biomeName(h, terrainNormalY(cam.x, cam.z), cam.x, cam.z);
     this._el.disc.textContent = '\u25c6 ' + this._discovered.size + ' discovered';
+
     var mins = Math.floor(this._dayT * 1440);
     var hh = String(Math.floor(mins / 60)).padStart(2, '0');
     var mm = String(mins % 60).padStart(2, '0');
     this._el.clock.textContent = (this._day > 0.5 ? '\u2600\ufe0e' : '\u263d') + ' ' + hh + ':' + mm;
   }
 
+  // Repaints the offscreen minimap terrain around the camera
   _redrawMinimapBase() {
     var N = this._mapN, s = this._mapScale, half = (N - 1) / 2;
     var cam = this._camera.position;
     var px = this._mapImg.data;
     var i = 0;
+
     for (var iz = 0; iz < N; iz++) {
       var wz = cam.z + (iz - half) * s;
       for (var ix = 0; ix < N; ix++) {
@@ -1074,10 +1300,12 @@ export class InfiniteWorld extends HTMLElement {
         i += 4;
       }
     }
+
     this._mapOffCtx.putImageData(this._mapImg, 0, 0);
     this._mapCamX = cam.x; this._mapCamZ = cam.z;
   }
 
+  // Draws the minimap, beacon dots, and player heading arrow
   _drawMinimap() {
     var ctx = this._mapCtx;
     var W = 168;
@@ -1090,6 +1318,7 @@ export class InfiniteWorld extends HTMLElement {
     ctx.drawImage(this._mapOff, ox, oz, W, W);
 
     var self = this;
+    // Draws discovered and undiscovered beacon markers on the map
     this._beacons.forEach(function (b) {
       var dx = (b.x - cam.x) / wpp, dz = (b.z - cam.z) / wpp;
       if (dx * dx + dz * dz > 78 * 78) return;
@@ -1116,6 +1345,7 @@ export class InfiniteWorld extends HTMLElement {
     ctx.restore();
   }
 
+  // Updates FPS readout and adapts render pixel ratio to performance
   _updateFps(now) {
     this._fpsFrames++;
     if (now - this._fpsLast < 1000) return;
@@ -1123,6 +1353,7 @@ export class InfiniteWorld extends HTMLElement {
     this._fpsFrames = 0;
     this._fpsLast = now;
     this._el.fps.textContent = this._fps + ' fps';
+
     if (this._fps < 52 && this._px > 0.8) {
       this._px = Math.max(0.8, this._px - 0.15);
       this._resize();
@@ -1132,6 +1363,7 @@ export class InfiniteWorld extends HTMLElement {
     }
   }
 
+  // Main animation frame: simulation, atmosphere, HUD, and render
   _tick(now) {
     this._raf = requestAnimationFrame(this._tick);
     var dt = Math.min((now - this._last) / 1000 || 0.016, 0.05);

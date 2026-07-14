@@ -2,7 +2,7 @@
 
 Chunk-based infinite 3D world explorer built with **React**, **Three.js**, and **Bun**.
 
-Explore procedurally generated terrain with day/night cycles, weather, points of interest, and a full HUD — all rendered in the browser via WebGL.
+Explore procedurally generated terrain with day/night cycles, weather, points of interest, ambient music, and a full HUD — all rendered in the browser via WebGL.
 
 ## Stack
 
@@ -12,10 +12,12 @@ Explore procedurally generated terrain with day/night cycles, weather, points of
 | [Vite](https://vite.dev) | Dev server and production build |
 | [React 19](https://react.dev) | UI shell |
 | [Three.js](https://threejs.org) | WebGL rendering (terrain, water, sky, instanced nature) |
+| [Howler.js](https://howlerjs.com) | Background music playback |
+| [assimpjs](https://github.com/makediff/assimpjs) | Loading `.blend` / `.3ds` assets (trees, rocks) |
 | [@react-three/fiber](https://docs.pmnd.rs/react-three-fiber) | React renderer for Three.js (available for extending the scene) |
-| [@react-three/drei](https://github.com/pmndrs/drei) | Useful R3F helpers and abstractions |
+| [@react-three/drei](https://docs.pmnd.rs/drei) | Useful R3F helpers and abstractions |
 
-The core world engine lives in `src/engine/engine.js` as a self-registering `<infinite-world>` web component. React mounts it full-screen; the engine manages its own renderer, chunk streaming, physics, and HUD.
+The core world engine lives in `src/engine/` as a self-registering `<infinite-world>` web component. React mounts it full-screen; the engine manages its own renderer, chunk streaming, physics, HUD, and audio.
 
 ## Prerequisites
 
@@ -46,6 +48,7 @@ bun run preview
 | **Space** | Jump / double-jump |
 | **Shift** | Sprint |
 | **E** | Discover nearby point of interest |
+| **♪** music button | Toggle background music |
 
 ### Mobile
 
@@ -56,17 +59,32 @@ bun run preview
 | **Jump** button | Jump / double-jump |
 | **Sprint** button | Hold to sprint |
 | **⚙** settings | Left- or right-handed layout |
+| **♪** music button | Toggle background music |
 
+## Music
+
+Background track: **“A Drifting Lens”** by [Amos Roddy](https://amosroddy.bandcamp.com/).
+
+Used for ambient background only. Mute or unmute anytime with the music button (top center, beside settings on mobile). Preference is saved locally.
 
 ## Project layout
 
 ```
 src/
-├── App.tsx                 # Root React component
+├── App.tsx
 ├── components/
-│   └── InfiniteWorld.tsx   # Mounts the <infinite-world> custom element
+│   └── InfiniteWorld.tsx      # Mounts <infinite-world>
+├── assets/                    # Textures, models, music
 └── engine/
-    └── engine.js           # Three.js world engine (chunks, shaders, HUD)
+    ├── engine.js              # Registers the custom element
+    ├── InfiniteWorld.js       # Orchestration (chunks, input, audio)
+    ├── config.js              # World constants
+    ├── noise.js               # Deterministic hash noise
+    ├── biomes/                # Biome names and minimap colors
+    ├── terrain/               # Height, shaders, chunks, spawn
+    ├── elements/              # Trees, rocks, beacons, water, sky
+    └── ui/
+        └── hud.js             # Overlay markup (loading, HUD, controls)
 ```
 
 ## License

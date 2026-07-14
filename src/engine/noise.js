@@ -1,5 +1,6 @@
 /* Deterministic hash-based value noise */
 
+// Returns a deterministic hash in [0, 1) for integer lattice coordinates
 export function ihash(ix, iz) {
   var n = (ix * 374761393 + iz * 668265263) | 0;
   n = Math.imul(n ^ (n >>> 13), 1274126177);
@@ -7,11 +8,12 @@ export function ihash(ix, iz) {
   return (n >>> 0) / 4294967296;
 }
 
-/* Quintic hermite — C2-smooth fade, less faceting than cubic. */
+// Quintic hermite fade — C2-smooth, less faceting than cubic
 function fade(t) {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
+// Returns smooth value noise at continuous world coordinates
 export function vnoise(x, z) {
   var ix = Math.floor(x), iz = Math.floor(z);
   var fx = x - ix, fz = z - iz;
@@ -21,29 +23,35 @@ export function vnoise(x, z) {
   return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
 }
 
+// Returns fractal Brownian motion noise averaged over oct octaves
 export function fbm(x, z, oct) {
   var v = 0, amp = 0.5, tot = 0;
   for (var i = 0; i < oct; i++) {
     v += vnoise(x, z) * amp;
-    tot += amp; amp *= 0.5;
-    x = x * 2.03 + 11.31; z = z * 2.03 - 7.77;
+    tot += amp;
+    amp *= 0.5;
+    x = x * 2.03 + 11.31;
+    z = z * 2.03 - 7.77;
   }
   return v / tot;
 }
 
-/* Ridged multifractal — sharp crests, smooth valleys. */
+// Returns ridged multifractal noise with sharp crests and smooth valleys
 export function ridged(x, z, oct) {
   var v = 0, amp = 0.5, tot = 0;
   for (var i = 0; i < oct; i++) {
     var n = 1 - Math.abs(2 * vnoise(x, z) - 1);
     n = n * n;
     v += n * amp;
-    tot += amp; amp *= 0.5;
-    x = x * 2.07 + 9.17; z = z * 2.07 - 5.43;
+    tot += amp;
+    amp *= 0.5;
+    x = x * 2.07 + 9.17;
+    z = z * 2.07 - 5.43;
   }
   return v / tot;
 }
 
+// Returns a smooth Hermite step from a to b at x
 export function sstep(a, b, x) {
   var t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * t * (t * (t * 6 - 15) + 10);

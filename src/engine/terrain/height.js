@@ -1,17 +1,17 @@
 import { SEA_LEVEL } from '../config.js';
 import { fbm, ridged, sstep, vnoise } from '../noise.js';
 
-/* Continental noise — low = open ocean basin, high = landmass. */
+// Returns continental noise — low is ocean basin, high is landmass
 export function continentNoise(x, z) {
   return fbm(x * 0.0013, z * 0.0013, 4);
 }
 
-/* Open-ocean seed: submerged and firmly in the continental ocean basin. */
+// Returns true when the point is submerged in the open-ocean continental basin
 export function isOceanBasin(x, z) {
   return continentNoise(x, z) < 0.40;
 }
 
-/* The single source of truth for terrain height (mesh AND camera). */
+// Returns terrain height at world coordinates (mesh and camera source of truth)
 export function terrainHeight(x, z) {
   var cont = continentNoise(x, z);
   var hills = fbm(x * 0.0085 + 37.7, z * 0.0085 - 11.2, 5);
@@ -48,7 +48,7 @@ export function terrainHeight(x, z) {
   return h;
 }
 
-/* Fills `out` with the unit terrain normal (points up / out of ground). */
+// Fills out with the unit terrain normal pointing up and out of the ground
 export function terrainNormal(x, z, out) {
   var e = 0.85;
   var dx = terrainHeight(x - e, z) - terrainHeight(x + e, z);
@@ -60,6 +60,7 @@ export function terrainNormal(x, z, out) {
   return out;
 }
 
+// Returns the Y component of the unit terrain normal at world coordinates
 export function terrainNormalY(x, z) {
   var e = 0.85;
   var dx = terrainHeight(x - e, z) - terrainHeight(x + e, z);

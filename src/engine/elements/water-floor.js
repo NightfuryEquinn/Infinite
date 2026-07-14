@@ -6,6 +6,7 @@ export var WATER_FLOOR_EXTENT = 560;
 export var WATER_FLOOR_MIN = -35;
 export var WATER_FLOOR_MAX = 22;
 
+// Creates an empty RG heightmap texture for water floor sampling
 export function createFloorHeightmap(THREE) {
   var n = WATER_FLOOR_RES;
   var data = new Uint8Array(n * n * 2);
@@ -14,17 +15,17 @@ export function createFloorHeightmap(THREE) {
   tex.magFilter = THREE.LinearFilter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
+
   return { tex: tex, data: data, originX: 0, originZ: 0, lastGX: null, lastGZ: null };
 }
 
-/**
- * R = encoded terrain height under the water plane.
- * G = ocean connectivity (255 = tidal ocean, 0 = static pond/lake).
- */
+// Updates water-floor heightmap (R = terrain height, G = ocean connectivity) around the camera
 export function updateFloorHeightmap(floor, cx, cz) {
   var grid = 28;
   var gx = Math.floor(cx / grid), gz = Math.floor(cz / grid);
+
   if (floor.lastGX === gx && floor.lastGZ === gz) return floor;
+
   floor.lastGX = gx;
   floor.lastGZ = gz;
 
@@ -42,6 +43,7 @@ export function updateFloorHeightmap(floor, cx, cz) {
 
   for (var iz = 0; iz < n; iz++) {
     var z = floor.originZ + iz * step;
+
     for (var ix = 0; ix < n; ix++) {
       var x = floor.originX + ix * step;
       var i = iz * n + ix;
@@ -49,8 +51,10 @@ export function updateFloorHeightmap(floor, cx, cz) {
       var t = Math.min(1, Math.max(0, (h - minH) * inv));
       floor.data[i * 2] = Math.round(t * 255);
       floor.data[i * 2 + 1] = 0;
+
       if (h < SEA_LEVEL) {
         wet[i] = 1;
+
         if (isOceanBasin(x, z)) {
           ocean[i] = 1;
           queue[qt++] = i;
@@ -70,9 +74,12 @@ export function updateFloorHeightmap(floor, cx, cz) {
       cy > 0 ? cur - n : -1,
       cy < n - 1 ? cur + n : -1
     ];
+
     for (var k = 0; k < 4; k++) {
       var ni = nbs[k];
+
       if (ni < 0 || !wet[ni] || ocean[ni]) continue;
+
       ocean[ni] = 1;
       queue[qt++] = ni;
     }
@@ -81,6 +88,8 @@ export function updateFloorHeightmap(floor, cx, cz) {
   for (var j = 0; j < n * n; j++) {
     floor.data[j * 2 + 1] = ocean[j] ? 255 : 0;
   }
+
   floor.tex.needsUpdate = true;
+
   return floor;
 }

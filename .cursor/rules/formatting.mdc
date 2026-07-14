@@ -1,0 +1,62 @@
+---
+description: Indentation, function comments, line breaks, and HTML string readability
+alwaysApply: true
+---
+
+# Formatting Standards
+
+## Indentation
+
+Use **2-space** indentation everywhere. Never tabs.
+
+## Function Comments
+
+Add a single-line comment above every function describing what it does.
+
+```javascript
+// Returns the rock mesh scaled for the given world chunk
+function createRock(scale) {
+  // ...
+}
+```
+
+## Long Functions
+
+Break long functions with hard returns so related sections are visually grouped. Prefer early returns and blank lines between logical steps over dense blocks.
+
+```javascript
+// ❌ BAD — dense, hard to scan
+function updateTrees(delta) {
+  for (const tree of trees) { tree.rotation.y += delta; if (tree.ready) tree.update(delta); applyWind(tree); }
+}
+
+// ✅ GOOD — hard returns between steps
+function updateTrees(delta) {
+  for (const tree of trees) {
+    tree.rotation.y += delta;
+
+    if (!tree.ready) continue;
+
+    tree.update(delta);
+    applyWind(tree);
+  }
+}
+```
+
+## HTML Strings
+
+Build HTML across multiple lines for readability. Do not pack an entire markup string onto one line.
+
+```javascript
+// ❌ BAD
+el.innerHTML = `<div class="panel"><h2>${title}</h2><p>${body}</p><button type="button">OK</button></div>`;
+
+// ✅ GOOD
+el.innerHTML = `
+  <div class="panel">
+    <h2>${title}</h2>
+    <p>${body}</p>
+    <button type="button">OK</button>
+  </div>
+`;
+```

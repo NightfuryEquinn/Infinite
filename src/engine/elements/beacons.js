@@ -45,14 +45,17 @@ export var LORE = [
   'Whoever planted this meant for it to be found. Just not soon.'
 ];
 
+// Spawns a discoverable beacon with glow sprite in eligible chunks
 export function spawnBeacon(chunk, ctx) {
   var THREE = ctx.THREE;
   var cx = chunk.cx, cz = chunk.cz;
+
   if (ihash(cx * 7919 + 13, cz * 6271 - 7) >= 0.16) return;
 
   var px = (cx + 0.15 + 0.7 * ihash(cx * 31 + 7, cz * 17 + 3)) * CHUNK_SIZE;
   var pz = (cz + 0.15 + 0.7 * ihash(cx * 23 - 5, cz * 41 + 11)) * CHUNK_SIZE;
   var ph = terrainHeight(px, pz);
+
   if (ph < 2.5 || ph > 38) return;
 
   var id = 'p' + cx + '_' + cz;
