@@ -5,7 +5,11 @@ export var CHUNK_SIZE = 64;
 export var TREE_HEIGHT_SCALE = 1.8;
 export var CHUNK_RES = 36;
 export var VIEW_RADIUS = 6;
-export var UNLOAD_RADIUS = 5.6;
+/* Must be >= VIEW_RADIUS so terrain/trees share one stable disk around the player. */
+export var UNLOAD_RADIUS = 7;
+/* Ortho half-extent (m) for the sun shadow map — tracks the player with the light. */
+export var SHADOW_EXTENT = 220;
+export var SHADOW_MAP_SIZE = 1024;
 export var SEA_LEVEL = 0;
 export var EYE_HEIGHT = 5;
 export var WALK_SPEED = 16;

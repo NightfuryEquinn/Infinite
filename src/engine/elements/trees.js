@@ -255,17 +255,27 @@ function attachTreeEffects(THREE, material, env) {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
       '#include <common>\nuniform vec3 uFogColor;\nuniform float uFogNear;\nuniform float uFogFar;'
-    ).replace(
-      '#include <output_fragment>',
-      [
-        '#include <output_fragment>',
-        'float treeFog = smoothstep(uFogNear, uFogFar, length(vViewPosition));',
-        'gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, treeFog);'
-      ].join('\n')
     );
+    /* three r15x+ renamed output_fragment → opaque_fragment */
+    var fogInject = [
+      'float treeFog = smoothstep(uFogNear, uFogFar, length(vViewPosition));',
+      'gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, treeFog);',
+      'if (treeFog > 0.98) discard;'
+    ].join('\n');
+    if (shader.fragmentShader.indexOf('#include <opaque_fragment>') !== -1) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <opaque_fragment>',
+        '#include <opaque_fragment>\n' + fogInject
+      );
+    } else {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <output_fragment>',
+        '#include <output_fragment>\n' + fogInject
+      );
+    }
   };
   material.customProgramCacheKey = function () {
-    return (foliage ? 'foliage' : 'bark') + (material.map ? '-map' : '');
+    return 'tree-fog-v2-' + (foliage ? 'foliage' : 'bark') + (material.map ? '-map' : '');
   };
   env.materials.push(material);
 }
@@ -438,6 +448,8 @@ export function spawnTrees(chunk, ctx) {
         inst.setMatrixAt(m, partPlacements[m].matrix);
       }
       inst.instanceMatrix.needsUpdate = true;
+      inst.computeBoundingSphere();
+      /* Keep shadow casters in the shadow pass — ortho frustum differs from camera frustum. */
       inst.frustumCulled = false;
       inst.castShadow = true;
       inst.receiveShadow = false;

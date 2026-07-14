@@ -1,5 +1,6 @@
 import {
   CHUNK_SIZE, DAY_LENGTH, EYE_HEIGHT, FOG_COLOR, FOG_FAR, FOG_NEAR,
+  SHADOW_EXTENT, SHADOW_MAP_SIZE,
   GRAVITY, JUMP_V, LS_KEY, SEA_LEVEL, SKY_ZENITH, SNOW_N, SPRINT_SPEED,
   SUN, UNLOAD_RADIUS, VIEW_RADIUS, WALK_SPEED, WIND_N
 } from './config.js';
@@ -169,15 +170,17 @@ export class InfiniteWorld extends HTMLElement {
     this._sunLight = new THREE.DirectionalLight(0xfff0dc, 1.15);
     this._sunLight.position.copy(sunDir).multiplyScalar(180);
     this._sunLight.castShadow = true;
-    this._sunLight.shadow.mapSize.set(1024, 1024);
+    this._sunLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     this._sunLight.shadow.camera.near = 2;
-    this._sunLight.shadow.camera.far = 420;
-    this._sunLight.shadow.camera.left = -110;
-    this._sunLight.shadow.camera.right = 110;
-    this._sunLight.shadow.camera.top = 110;
-    this._sunLight.shadow.camera.bottom = -110;
+    this._sunLight.shadow.camera.far = SHADOW_EXTENT * 2 + 80;
+    this._sunLight.shadow.camera.left = -SHADOW_EXTENT;
+    this._sunLight.shadow.camera.right = SHADOW_EXTENT;
+    this._sunLight.shadow.camera.top = SHADOW_EXTENT;
+    this._sunLight.shadow.camera.bottom = -SHADOW_EXTENT;
+    this._sunLight.shadow.camera.updateProjectionMatrix();
     this._sunLight.shadow.bias = -0.0004;
     this._sunLight.shadow.normalBias = 0.03;
+    this._sunLight.shadow.autoUpdate = true;
     scene.add(this._sunLight);
     scene.add(this._sunLight.target);
 
@@ -189,15 +192,23 @@ export class InfiniteWorld extends HTMLElement {
         uFogColor: { value: fogColor },
         uFogNear: { value: FOG_NEAR },
         uFogFar: { value: FOG_FAR },
-        uShadowMap: { value: this._sunLight.shadow.map },
+        uShadowMap: { value: null },
         uShadowMatrix: { value: this._sunLight.shadow.matrix },
-        uShadowMapSize: { value: new THREE.Vector2(1024, 1024) },
+        uShadowMapSize: { value: new THREE.Vector2(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE) },
         uShadowBias: { value: 0.0006 },
         uShadowMix: { value: 1.0 }
       },
       vertexShader: TERRAIN_VERT,
       fragmentShader: TERRAIN_FRAG
     });
+    this._terrainMat.onBeforeRender = function () {
+      var light = self._sunLight;
+      var shadow = light.shadow;
+      var u = self._terrainMat.uniforms;
+      u.uShadowMap.value = shadow.map ? shadow.map.texture : null;
+      u.uShadowMatrix.value.copy(shadow.matrix);
+      u.uShadowMix.value = self._day;
+    };
 
     var sky = new THREE.Mesh(
       new THREE.SphereGeometry(600, 24, 14),
@@ -581,27 +592,29 @@ export class InfiniteWorld extends HTMLElement {
     this._ambLight.intensity = 0.22 + 0.48 * day;
     this._sunLight.color.copy(this._sunLightCol);
     this._sunLight.intensity = 0.12 + 1.15 * day;
-    this._sunLight.position.copy(this._sunDir).multiplyScalar(180);
   }
 
   _updateAtmosphere(dt) {
     var t = this._time;
     var cam = this._camera.position;
 
-    this._sunLight.target.position.set(cam.x, cam.y, cam.z);
+    /* Keep the shadow volume centered on the player so received shadows track movement.
+       Snap to shadow-map texels to reduce swimming as the camera moves. */
+    var lift = 40;
+    var texel = (SHADOW_EXTENT * 2) / SHADOW_MAP_SIZE;
+    var tx = Math.round(cam.x / texel) * texel;
+    var tz = Math.round(cam.z / texel) * texel;
+
+    this._sunLight.target.position.set(tx, cam.y, tz);
     this._sunLight.target.updateMatrixWorld();
+
+    var reach = SHADOW_EXTENT * 0.85;
     this._sunLight.position.set(
-      cam.x + this._sunDir.x * 180,
-      cam.y + this._sunDir.y * 180,
-      cam.z + this._sunDir.z * 180
+      tx + this._sunDir.x * reach,
+      cam.y + this._sunDir.y * reach + lift,
+      tz + this._sunDir.z * reach
     );
     this._sunLight.updateMatrixWorld();
-    this._sunLight.shadow.updateMatrices(this._sunLight);
-
-    var tu = this._terrainMat.uniforms;
-    tu.uShadowMap.value = this._sunLight.shadow.map;
-    tu.uShadowMatrix.value.copy(this._sunLight.shadow.matrix);
-    tu.uShadowMix.value = this._day;
 
     var W = this._weather;
     if (t > W.gustUntil) { W.gustOn = !W.gustOn; W.gustUntil = t + 60 + Math.random() * 1140; }
