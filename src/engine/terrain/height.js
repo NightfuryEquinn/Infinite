@@ -1,8 +1,19 @@
+import { SEA_LEVEL } from '../config.js';
 import { fbm, sstep, vnoise } from '../noise.js';
+
+/* Continental noise — low = open ocean basin, high = landmass. */
+export function continentNoise(x, z) {
+  return fbm(x * 0.0013, z * 0.0013, 3);
+}
+
+/* Open-ocean seed: submerged and firmly in the continental ocean basin. */
+export function isOceanBasin(x, z) {
+  return continentNoise(x, z) < 0.40;
+}
 
 /* The single source of truth for terrain height (mesh AND camera). */
 export function terrainHeight(x, z) {
-  var cont = fbm(x * 0.0013, z * 0.0013, 3);
+  var cont = continentNoise(x, z);
   var hills = fbm(x * 0.0085 + 37.7, z * 0.0085 - 11.2, 4);
   var land = sstep(0.38, 0.52, cont);
   var h = (cont - 0.42) * 88;
@@ -13,6 +24,19 @@ export function terrainHeight(x, z) {
     h += m * r * r * 54;
   }
   h += (vnoise(x * 0.05, z * 0.05) - 0.5) * 2.4;
+
+  /* Closed inland bowls — ponds/lakes sealed off from the ocean. */
+  var inland = sstep(0.46, 0.58, cont);
+  if (inland > 0.01) {
+    var pond = fbm(x * 0.0058 + 17.3, z * 0.0058 - 29.1, 3);
+    var bowl = sstep(0.58, 0.74, pond);
+    if (bowl > 0.001) {
+      var depth = 2.5 + sstep(0.70, 0.86, pond) * 5.5;
+      var carved = Math.min(h, SEA_LEVEL - depth * bowl);
+      h = h + (carved - h) * inland * bowl;
+    }
+  }
+
   return h;
 }
 

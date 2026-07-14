@@ -1053,7 +1053,7 @@ export class InfiniteWorld extends HTMLElement {
     this._el.speed.textContent = this._speed.toFixed(1) + ' m/s';
     this._el.speedbar.style.width = Math.min(100, (this._speed / SPRINT_SPEED) * 100) + '%';
     var h = terrainHeight(cam.x, cam.z);
-    this._el.biome.textContent = biomeName(h, terrainNormalY(cam.x, cam.z));
+    this._el.biome.textContent = biomeName(h, terrainNormalY(cam.x, cam.z), cam.x, cam.z);
     this._el.disc.textContent = '\u25c6 ' + this._discovered.size + ' discovered';
     var mins = Math.floor(this._dayT * 1440);
     var hh = String(Math.floor(mins / 60)).padStart(2, '0');
@@ -1069,7 +1069,8 @@ export class InfiniteWorld extends HTMLElement {
     for (var iz = 0; iz < N; iz++) {
       var wz = cam.z + (iz - half) * s;
       for (var ix = 0; ix < N; ix++) {
-        mapColor(terrainHeight(cam.x + (ix - half) * s, wz), px, i);
+        var wx = cam.x + (ix - half) * s;
+        mapColor(terrainHeight(wx, wz), px, i, wx, wz);
         i += 4;
       }
     }

@@ -1,8 +1,15 @@
 import { SEA_LEVEL } from '../config.js';
+import { continentNoise } from '../terrain/height.js';
+import { inlandWaterName, isConnectedToOcean } from '../terrain/water-type.js';
 
-export function biomeName(h, ny) {
-  if (h < -10) return 'Deep Ocean';
-  if (h < 0.3) return 'Shallows';
+export function biomeName(h, ny, x, z) {
+  if (h < SEA_LEVEL) {
+    if (x != null && z != null && !isConnectedToOcean(x, z)) {
+      return inlandWaterName(h);
+    }
+    if (h < -10) return 'Deep Ocean';
+    return 'Shallows';
+  }
   if (h < 2.2) return 'Sandy Shores';
   if (h > 36) return 'Snowy Peaks';
   if (ny < 0.62) return 'Rocky Cliffs';
@@ -10,11 +17,17 @@ export function biomeName(h, ny) {
   return 'Verdant Plains';
 }
 
-export function mapColor(h, px, i) {
+export function mapColor(h, px, i, x, z) {
   var r, g, b, t;
   if (h < SEA_LEVEL) {
-    t = Math.min(1, Math.max(0, (h + 26) / 26));
-    r = 13 + t * 25; g = 34 + t * 52; b = 52 + t * 56;
+    var inland = x != null && z != null && continentNoise(x, z) >= 0.40;
+    if (inland) {
+      t = Math.min(1, Math.max(0, (h + 12) / 12));
+      r = 18 + t * 22; g = 62 + t * 48; b = 48 + t * 36;
+    } else {
+      t = Math.min(1, Math.max(0, (h + 26) / 26));
+      r = 13 + t * 25; g = 34 + t * 52; b = 52 + t * 56;
+    }
   } else if (h < 0.8) {
     r = 122; g = 112; b = 92;
   } else if (h < 2.2) {
