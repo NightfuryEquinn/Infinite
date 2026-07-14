@@ -3,7 +3,7 @@ import assimpWasm from 'assimpjs/dist/assimpjs.wasm?url';
 import rockTexUrl from '../../assets/Rock-Texture-Surface.jpg';
 import { CHUNK_SIZE } from '../config.js';
 import { ihash } from '../noise.js';
-import { terrainHeight, terrainNormalY } from '../terrain/height.js';
+import { terrainHeight, terrainNormal, terrainNormalY } from '../terrain/height.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
@@ -13,6 +13,9 @@ var _yAxis = null;
 var _xAxis = null;
 var _tipQ = null;
 var _yawQ = null;
+var _alignQ = null;
+var _nml = null;
+var _pos = null;
 
 function toArrayBuffer(data) {
   if (data instanceof ArrayBuffer) return data;
@@ -290,6 +293,9 @@ export function spawnRocks(chunk, ctx) {
     _xAxis = new THREE.Vector3(1, 0, 0);
     _tipQ = new THREE.Quaternion().setFromAxisAngle(_xAxis, Math.PI / 2);
     _yawQ = new THREE.Quaternion();
+    _alignQ = new THREE.Quaternion();
+    _nml = new THREE.Vector3();
+    _pos = new THREE.Vector3();
   }
 
   var cx = chunk.cx, cz = chunk.cz;
@@ -326,11 +332,16 @@ export function spawnRocks(chunk, ctx) {
     var px = slots[o], pz = slots[o + 1], ph = slots[o + 2], s = slots[o + 3];
     var bury = flatH * s * slots[o + 5];
 
+    terrainNormal(px, pz, _nml);
+    _alignQ.setFromUnitVectors(_yAxis, _nml);
     _yawQ.setFromAxisAngle(_yAxis, slots[o + 4]);
-    dummy.quaternion.copy(_tipQ).premultiply(_yawQ);
+    /* Tip onto side, random yaw, then tilt so the flat face follows the slope. */
+    dummy.quaternion.copy(_tipQ).premultiply(_yawQ).premultiply(_alignQ);
     dummy.scale.setScalar(s);
-    /* Tip (π/2 X) maps local y' = -z; yaw around Y leaves Y unchanged. */
-    dummy.position.set(px, (ph - bury) - tipMinY * s, pz);
+    /* Seat along the terrain normal so steep ground doesn't leave a world-Y gap. */
+    _pos.set(px, ph, pz);
+    _pos.addScaledVector(_nml, -tipMinY * s - bury);
+    dummy.position.copy(_pos);
     dummy.updateMatrix();
     inst.setMatrixAt(m, dummy.matrix);
 
@@ -338,7 +349,7 @@ export function spawnRocks(chunk, ctx) {
       x: px,
       z: pz,
       r: flatR * s,
-      top: ph - bury + flatH * s
+      top: ph - bury + flatH * s * _nml.y
     });
   }
   inst.instanceMatrix.needsUpdate = true;

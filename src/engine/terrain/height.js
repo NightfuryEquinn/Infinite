@@ -40,6 +40,18 @@ export function terrainHeight(x, z) {
   return h;
 }
 
+/* Fills `out` with the unit terrain normal (points up / out of ground). */
+export function terrainNormal(x, z, out) {
+  var e = 1.2;
+  var dx = terrainHeight(x - e, z) - terrainHeight(x + e, z);
+  var dz = terrainHeight(x, z - e) - terrainHeight(x, z + e);
+  var inv = 1 / Math.sqrt(dx * dx + dz * dz + 4 * e * e);
+  out.x = dx * inv;
+  out.y = 2 * e * inv;
+  out.z = dz * inv;
+  return out;
+}
+
 export function terrainNormalY(x, z) {
   var e = 1.2;
   var dx = terrainHeight(x - e, z) - terrainHeight(x + e, z);
