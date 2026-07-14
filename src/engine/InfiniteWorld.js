@@ -6,9 +6,9 @@ import {
 } from './config.js';
 import { biomeName, mapColor } from './biomes/index.js';
 import { spawnBeacon } from './elements/beacons.js';
-import { spawnRocks, buildRockGeometry } from './elements/rocks.js';
+import { spawnRocks, loadRockAssets } from './elements/rocks.js';
 import { SKY_FRAG, SKY_VERT } from './elements/sky.js';
-import { spawnTrees, loadTreeAssets, TREE_FRAG, TREE_VERT } from './elements/trees.js';
+import { spawnTrees, loadTreeAssets } from './elements/trees.js';
 import {
   createFloorHeightmap, updateFloorHeightmap,
   WATER_FLOOR_EXTENT, WATER_FLOOR_MAX, WATER_FLOOR_MIN
@@ -138,8 +138,7 @@ export class InfiniteWorld extends HTMLElement {
       scene: this._scene,
       treeVariants: this._treeVariants,
       treeEnv: this._treeEnv,
-      rockGeo: this._rockGeo,
-      rockMat: this._rockMat,
+      rockAsset: this._rockAsset,
       beaconGeo: this._beaconGeo,
       glowTex: this._glowTex,
       beacons: this._beacons,
@@ -300,12 +299,20 @@ export class InfiniteWorld extends HTMLElement {
 
     this._treeVariants = null;
     this._treesReady = false;
+    this._rockAsset = null;
+    this._rocksReady = false;
     this._treeEnv = {
       uTime: { value: 0 },
       uGust: { value: 0.6 },
       uSunDir: { value: sunDir },
       uAmbient: { value: this._ambientCol },
       uSunCol: { value: this._sunLightCol },
+      uFogColor: { value: fogColor },
+      uFogNear: { value: FOG_NEAR },
+      uFogFar: { value: FOG_FAR },
+      materials: []
+    };
+    this._rockEnv = {
       uFogColor: { value: fogColor },
       uFogNear: { value: FOG_NEAR },
       uFogFar: { value: FOG_FAR },
@@ -318,21 +325,10 @@ export class InfiniteWorld extends HTMLElement {
       self._treesReady = true;
     }).catch(function (err) { self._fail(err); });
 
-    this._rockGeo = buildRockGeometry(THREE);
-    this._rockMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-        uGust: { value: 0 },
-        uSunDir: { value: sunDir },
-        uAmbient: { value: this._ambientCol },
-        uSunCol: { value: this._sunLightCol },
-        uFogColor: { value: fogColor },
-        uFogNear: { value: FOG_NEAR },
-        uFogFar: { value: FOG_FAR }
-      },
-      vertexShader: TREE_VERT,
-      fragmentShader: TREE_FRAG
-    });
+    loadRockAssets(THREE, this._rockEnv).then(function (asset) {
+      self._rockAsset = asset;
+      self._rocksReady = true;
+    }).catch(function (err) { self._fail(err); });
 
     var softTex = makeSoftTexture(THREE);
     var snowPos = new Float32Array(SNOW_N * 3);
@@ -718,9 +714,11 @@ export class InfiniteWorld extends HTMLElement {
   }
 
   _processQueue() {
-    if (!this._treesReady) {
+    if (!this._treesReady || !this._rocksReady) {
       if (this._loading && this._el.loadtext) {
-        this._el.loadtext.textContent = 'loading tree models\u2026';
+        this._el.loadtext.textContent = !this._treesReady
+          ? 'loading tree models\u2026'
+          : 'loading rock models\u2026';
       }
       return;
     }
