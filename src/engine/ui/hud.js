@@ -1,5 +1,6 @@
 var GLASS = 'background:rgba(8,13,20,.55);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:12px;';
 var MONO = "font-family:'IBM Plex Mono',ui-monospace,monospace;";
+var BTN = GLASS + 'pointer-events:auto;touch-action:none;-webkit-tap-highlight-color:transparent;color:#fff;font-weight:600;letter-spacing:.12em;cursor:pointer;display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;';
 
 export function hudHTML() {
   return [
@@ -15,7 +16,7 @@ export function hudHTML() {
     '  <canvas data-map width="168" height="168" style="display:block;border-radius:8px;"></canvas>',
     '  <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);' + MONO + 'font-size:10px;color:rgba(255,255,255,.75);text-shadow:0 1px 3px rgba(0,0,0,.8);">N</div>',
     '</div>',
-    '<div style="position:absolute;left:16px;bottom:16px;padding:12px 16px;' + GLASS + 'pointer-events:none;min-width:208px;display:flex;flex-direction:column;gap:7px;">',
+    '<div data-stats style="position:absolute;left:16px;bottom:16px;padding:16px;' + GLASS + 'pointer-events:none;min-width:208px;display:flex;flex-direction:column;gap:7px;">',
     '  <div style="display:flex;justify-content:space-between;gap:16px;align-items:baseline;">',
     '    <span style="font-size:10px;letter-spacing:.18em;color:rgba(255,255,255,.5);">BIOME</span>',
     '    <span data-biome style="font-size:13px;font-weight:500;color:#fff;">\u2014</span>',
@@ -39,10 +40,34 @@ export function hudHTML() {
     '  <div data-popup-lore style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.78);margin-bottom:9px;">\u2014</div>',
     '  <div data-popup-action style="' + MONO + 'font-size:11px;color:#ffd86b;">[ E ] DISCOVER</div>',
     '</div>',
+
+    /* Mobile-only: settings + virtual stick + action buttons */
+    '<button data-mobile-settings type="button" aria-label="Control settings" style="display:none;position:absolute;top:16px;left:50%;transform:translateX(-50%);width:44px;height:44px;' + BTN + 'border-radius:50%;z-index:4;color:rgba(255,255,255,.85);"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m9.25 22l-.4-3.2q-.325-.125-.612-.3t-.563-.375L4.7 19.375l-2.75-4.75l2.575-1.95Q4.5 12.5 4.5 12.338v-.675q0-.163.025-.338L1.95 9.375l2.75-4.75l2.975 1.25q.275-.2.575-.375t.6-.3l.4-3.2h5.5l.4 3.2q.325.125.613.3t.562.375l2.975-1.25l2.75 4.75l-2.575 1.95q.025.175.025.338v.674q0 .163-.05.338l2.575 1.95l-2.75 4.75l-2.95-1.25q-.275.2-.575.375t-.6.3l-.4 3.2zm2.8-6.5q1.45 0 2.475-1.025T15.55 12t-1.025-2.475T12.05 8.5q-1.475 0-2.488 1.025T8.55 12t1.013 2.475T12.05 15.5"/></svg></button>',
+    '<div data-mobile-panel style="display:none;position:absolute;top:68px;left:50%;transform:translateX(-50%);padding:14px 16px;min-width:220px;' + GLASS + 'pointer-events:auto;z-index:4;touch-action:manipulation;">',
+    '  <div style="font-size:11px;letter-spacing:.16em;color:rgba(255,255,255,.55);margin-bottom:10px;">MOBILE CONTROLS</div>',
+    '  <div style="font-size:13px;color:#fff;margin-bottom:10px;">Handedness</div>',
+    '  <div style="display:flex;gap:8px;">',
+    '    <button data-handed-right type="button" style="flex:1;padding:10px 8px;' + BTN + 'border-radius:10px;font-size:12px;background:rgba(143,216,255,.22);border-color:rgba(143,216,255,.45);">RIGHT</button>',
+    '    <button data-handed-left type="button" style="flex:1;padding:10px 8px;' + BTN + 'border-radius:10px;font-size:12px;">LEFT</button>',
+    '  </div>',
+    '  <div style="' + MONO + 'font-size:10px;color:rgba(255,255,255,.5);margin-top:10px;line-height:1.4;">Right: stick left \u00b7 Left: stick right</div>',
+    '</div>',
+    '<div data-mobile style="display:none;position:absolute;inset:0;pointer-events:none;z-index:3;">',
+    '  <div data-stick-zone style="position:absolute;bottom:28px;left:28px;width:148px;height:148px;pointer-events:auto;touch-action:none;">',
+    '    <div data-stick-base style="position:absolute;left:50%;top:50%;width:118px;height:118px;margin:-59px 0 0 -59px;border-radius:50%;' + GLASS + 'box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);">',
+    '      <div data-stick-knob style="position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;background:rgba(143,216,255,.55);border:1px solid rgba(255,255,255,.35);box-shadow:0 4px 16px rgba(0,0,0,.35);will-change:transform;"></div>',
+    '    </div>',
+    '  </div>',
+    '  <div data-actions style="position:absolute;bottom:36px;right:28px;display:flex;flex-direction:column;gap:14px;align-items:center;pointer-events:none;">',
+    '    <button data-btn-sprint type="button" style="width:72px;height:72px;border-radius:50%;' + BTN + 'font-size:11px;">SPRINT</button>',
+    '    <button data-btn-jump type="button" style="width:86px;height:86px;border-radius:50%;' + BTN + 'font-size:12px;background:rgba(143,216,255,.22);border-color:rgba(143,216,255,.4);">JUMP</button>',
+    '  </div>',
+    '</div>',
+
     '<div data-start style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(5,9,16,.42);cursor:pointer;">',
     '  <div style="text-align:center;padding:22px 34px;' + GLASS + '">',
-    '    <div style="font-size:15px;font-weight:700;letter-spacing:.26em;color:#fff;margin-bottom:8px;">\u25b6 CLICK TO EXPLORE</div>',
-    '    <div style="' + MONO + 'font-size:11px;color:rgba(255,255,255,.6);">pointer locks for mouse-look \u00b7 ESC releases</div>',
+    '    <div data-start-title style="font-size:15px;font-weight:700;letter-spacing:.26em;color:#fff;margin-bottom:8px;">\u25b6 CLICK TO EXPLORE</div>',
+    '    <div data-start-sub style="' + MONO + 'font-size:11px;color:rgba(255,255,255,.6);">pointer locks for mouse-look \u00b7 ESC releases</div>',
     '  </div>',
     '</div>',
     '<div data-loading style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0a0e14;transition:opacity .6s;z-index:5;">',

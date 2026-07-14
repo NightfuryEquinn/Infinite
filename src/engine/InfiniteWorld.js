@@ -1,8 +1,8 @@
 import {
   CHUNK_SIZE, DAY_LENGTH, EYE_HEIGHT, FOG_COLOR, FOG_FAR, FOG_NEAR,
   SHADOW_EXTENT, SHADOW_MAP_SIZE,
-  GRAVITY, JUMP_V, LS_KEY, SEA_LEVEL, SKY_ZENITH, SNOW_N, SPRINT_SPEED,
-  SUN, UNLOAD_RADIUS, VIEW_RADIUS, WALK_SPEED, WIND_N
+  GRAVITY, JUMP_V, LS_KEY, SEA_LEVEL, SETTINGS_LS_KEY, SKY_ZENITH, SNOW_N,
+  SPRINT_SPEED, SUN, UNLOAD_RADIUS, VIEW_RADIUS, WALK_SPEED, WIND_N
 } from './config.js';
 import { biomeName, mapColor } from './biomes/index.js';
 import { spawnBeacon } from './elements/beacons.js';
@@ -46,8 +46,10 @@ export class InfiniteWorld extends HTMLElement {
     root.appendChild(hud);
     this._el = {};
     ['cross', 'fps', 'clock', 'disc', 'map', 'biome', 'pos', 'speed', 'speedbar', 'hint',
-      'popup', 'popup-kicker', 'popup-name', 'popup-lore', 'popup-action',
-      'start', 'loading', 'loadbar', 'loadtext'].forEach(function (k) {
+      'stats', 'popup', 'popup-kicker', 'popup-name', 'popup-lore', 'popup-action',
+      'start', 'start-title', 'start-sub', 'loading', 'loadbar', 'loadtext',
+      'mobile', 'mobile-settings', 'mobile-panel', 'stick-zone', 'stick-base', 'stick-knob',
+      'actions', 'btn-sprint', 'btn-jump', 'handed-right', 'handed-left'].forEach(function (k) {
         self._el[k.replace(/-/g, '_')] = hud.querySelector('[data-' + k + ']');
       });
     this._el.start.style.pointerEvents = 'auto';
@@ -57,6 +59,12 @@ export class InfiniteWorld extends HTMLElement {
     this._queued = new Set();
     this._beacons = new Map();
     this._keys = {};
+    this._stick = { x: 0, y: 0 };
+    this._stickPointerId = null;
+    this._lookPointerId = null;
+    this._lookLast = null;
+    this._mobileSprint = false;
+    this._settingsOpen = false;
     this._yaw = Math.PI * 0.25;
     this._pitch = -0.06;
     this._vel = { x: 0, z: 0 };
@@ -87,9 +95,17 @@ export class InfiniteWorld extends HTMLElement {
       gustLevel: 0.6, snowLevel: 1
     };
     this._discovered = new Set();
+    this._handed = 'right';
+    this._isMobile = this._detectMobile();
     try {
       var saved = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
       if (Array.isArray(saved)) saved.forEach(function (id) { self._discovered.add(id); });
+    } catch (e) { /* ignore */ }
+    try {
+      var settings = JSON.parse(localStorage.getItem(SETTINGS_LS_KEY) || '{}');
+      if (settings && (settings.handed === 'left' || settings.handed === 'right')) {
+        this._handed = settings.handed;
+      }
     } catch (e) { /* ignore */ }
 
     loadThree().then(function (THREE) {
@@ -141,7 +157,7 @@ export class InfiniteWorld extends HTMLElement {
     renderer.setPixelRatio(this._px);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.domElement.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1;cursor:crosshair;';
+    renderer.domElement.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1;cursor:crosshair;touch-action:none;';
     this._root.insertBefore(renderer.domElement, this._root.firstChild);
     this._renderer = renderer;
     this._canvas = renderer.domElement;
@@ -388,10 +404,20 @@ export class InfiniteWorld extends HTMLElement {
       var k = KEYMAP[e.code];
       if (k) self._keys[k] = false;
     });
-    on(window, 'blur', function () { self._keys = {}; self._dragging = false; });
+    on(window, 'blur', function () {
+      self._keys = {};
+      self._dragging = false;
+      self._mobileSprint = false;
+      self._resetStick();
+      self._lookPointerId = null;
+      self._lookLast = null;
+      if (self._el.btn_sprint) {
+        self._el.btn_sprint.style.background = 'rgba(8,13,20,.55)';
+        self._el.btn_sprint.style.borderColor = 'rgba(255,255,255,.12)';
+      }    });
 
     function tryLock() {
-      if (self._dragLook) return;
+      if (self._isMobile || self._dragLook) return;
       try {
         var p = self._canvas.requestPointerLock && self._canvas.requestPointerLock();
         if (p && p.catch) p.catch(function () { self._enableDragLook(); });
@@ -400,7 +426,14 @@ export class InfiniteWorld extends HTMLElement {
         }, 350);
       } catch (e) { self._enableDragLook(); }
     }
-    on(this._el.start, 'click', tryLock);
+    on(this._el.start, 'click', function () {
+      if (self._isMobile) {
+        self._enableDragLook();
+        self._setLookActive(true);
+      } else {
+        tryLock();
+      }
+    });
     on(this._canvas, 'click', function () {
       if (!self._dragLook && document.pointerLockElement !== self._canvas) tryLock();
     });
@@ -410,24 +443,217 @@ export class InfiniteWorld extends HTMLElement {
     });
     on(document, 'mousemove', function (e) {
       var locked = document.pointerLockElement === self._canvas;
-      if (locked || (self._dragLook && self._dragging)) {
-        self._yaw -= (e.movementX || 0) * 0.0023;
-        self._pitch -= (e.movementY || 0) * 0.0021;
-        var lim = 1.45;
-        if (self._pitch > lim) self._pitch = lim;
-        if (self._pitch < -lim) self._pitch = -lim;
+      if (locked || (self._dragLook && self._dragging && self._lookPointerId == null)) {
+        self._applyLookDelta(e.movementX || 0, e.movementY || 0);
       }
     });
-    on(this._canvas, 'mousedown', function () { if (self._dragLook) self._dragging = true; });
-    on(window, 'mouseup', function () { self._dragging = false; });
+    on(this._canvas, 'mousedown', function (e) {
+      if (self._dragLook && e.button === 0 && self._lookPointerId == null) self._dragging = true;
+    });
+    on(window, 'mouseup', function () {
+      if (self._lookPointerId == null) self._dragging = false;
+    });
+
+    /* Touch / pointer look (mobile drag across canvas) */
+    on(this._canvas, 'pointerdown', function (e) {
+      if (!self._dragLook || e.pointerType === 'mouse') return;
+      if (self._lookPointerId != null) return;
+      self._lookPointerId = e.pointerId;
+      self._lookLast = { x: e.clientX, y: e.clientY };
+      self._dragging = true;
+      try { self._canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      e.preventDefault();
+    });
+    on(this._canvas, 'pointermove', function (e) {
+      if (e.pointerId !== self._lookPointerId || !self._lookLast) return;
+      var dx = e.clientX - self._lookLast.x;
+      var dy = e.clientY - self._lookLast.y;
+      self._lookLast = { x: e.clientX, y: e.clientY };
+      self._applyLookDelta(dx, dy);
+      e.preventDefault();
+    });
+    function endLookPointer(e) {
+      if (e.pointerId !== self._lookPointerId) return;
+      self._lookPointerId = null;
+      self._lookLast = null;
+      self._dragging = false;
+    }
+    on(this._canvas, 'pointerup', endLookPointer);
+    on(this._canvas, 'pointercancel', endLookPointer);
+
+    this._setupMobileControls(on);
+    if (this._isMobile) this._enableDragLook();
 
     this._resizeObs = new ResizeObserver(function () { self._resize(); });
     this._resizeObs.observe(this);
   }
 
+  _detectMobile() {
+    try {
+      if (window.matchMedia('(pointer: coarse)').matches) return true;
+      if (window.matchMedia('(hover: none)').matches && (navigator.maxTouchPoints || 0) > 0) return true;
+    } catch (e) { /* ignore */ }
+    return (navigator.maxTouchPoints || 0) > 0 &&
+      Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 900;
+  }
+
+  _applyLookDelta(dx, dy) {
+    this._yaw -= dx * 0.0023;
+    this._pitch -= dy * 0.0021;
+    var lim = 1.45;
+    if (this._pitch > lim) this._pitch = lim;
+    if (this._pitch < -lim) this._pitch = -lim;
+  }
+
+  _setupMobileControls(on) {
+    var self = this;
+    if (!this._isMobile) return;
+
+    this._el.mobile.style.display = 'block';
+    this._el.mobile_settings.style.display = 'flex';
+    this._el.hint.style.display = 'none';
+    this._el.stats.style.bottom = '190px';
+    this._el.stats.style.minWidth = '160px';
+    this._el.popup.style.bottom = '200px';
+    this._el.start_sub.textContent = 'tap to play \u00b7 stick move \u00b7 drag look \u00b7 jump & sprint';
+    this._el.start_title.textContent = '\u25b6 TAP TO EXPLORE';
+    this._applyHandedness();
+
+    var zone = this._el.stick_zone;
+    var knob = this._el.stick_knob;
+    var maxR = 40;
+
+    function setStickFromEvent(e) {
+      var rect = zone.getBoundingClientRect();
+      var cx = rect.left + rect.width * 0.5;
+      var cy = rect.top + rect.height * 0.5;
+      var dx = e.clientX - cx;
+      var dy = e.clientY - cy;
+      var len = Math.sqrt(dx * dx + dy * dy) || 1;
+      var clamped = Math.min(len, maxR);
+      var nx = (dx / len) * clamped;
+      var ny = (dy / len) * clamped;
+      knob.style.transform = 'translate(' + nx + 'px,' + ny + 'px)';
+      self._stick.x = nx / maxR;
+      self._stick.y = ny / maxR;
+    }
+
+    on(zone, 'pointerdown', function (e) {
+      if (self._stickPointerId != null) return;
+      self._stickPointerId = e.pointerId;
+      try { zone.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      setStickFromEvent(e);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    on(zone, 'pointermove', function (e) {
+      if (e.pointerId !== self._stickPointerId) return;
+      setStickFromEvent(e);
+      e.preventDefault();
+    });
+    function endStick(e) {
+      if (e.pointerId !== self._stickPointerId) return;
+      self._stickPointerId = null;
+      self._resetStick();
+    }
+    on(zone, 'pointerup', endStick);
+    on(zone, 'pointercancel', endStick);
+
+    var sprint = this._el.btn_sprint;
+    var jump = this._el.btn_jump;
+    function setSprint(on) {
+      self._mobileSprint = on;
+      sprint.style.background = on ? 'rgba(143,216,255,.38)' : 'rgba(8,13,20,.55)';
+      sprint.style.borderColor = on ? 'rgba(143,216,255,.65)' : 'rgba(255,255,255,.12)';
+    }
+    on(sprint, 'pointerdown', function (e) {
+      setSprint(true);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    on(sprint, 'pointerup', function (e) { setSprint(false); e.preventDefault(); });
+    on(sprint, 'pointercancel', function () { setSprint(false); });
+    on(sprint, 'pointerleave', function (e) {
+      if (e.buttons === 0) setSprint(false);
+    });
+    on(jump, 'pointerdown', function (e) {
+      self._jump();
+      jump.style.transform = 'scale(0.94)';
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    on(jump, 'pointerup', function () { jump.style.transform = ''; });
+    on(jump, 'pointercancel', function () { jump.style.transform = ''; });
+
+    on(this._el.mobile_settings, 'click', function (e) {
+      self._settingsOpen = !self._settingsOpen;
+      self._el.mobile_panel.style.display = self._settingsOpen ? 'block' : 'none';
+      e.stopPropagation();
+    });
+    on(this._el.handed_right, 'click', function (e) {
+      self._setHandedness('right');
+      e.stopPropagation();
+    });
+    on(this._el.handed_left, 'click', function (e) {
+      self._setHandedness('left');
+      e.stopPropagation();
+    });
+    on(this._el.mobile_panel, 'click', function (e) { e.stopPropagation(); });
+    on(this._root, 'pointerdown', function (e) {
+      if (!self._settingsOpen) return;
+      if (e.target.closest && (e.target.closest('[data-mobile-panel]') || e.target.closest('[data-mobile-settings]'))) {
+        return;
+      }
+      self._settingsOpen = false;
+      self._el.mobile_panel.style.display = 'none';
+    });
+    on(this._el.popup, 'click', function (e) {
+      self._tryDiscover();
+      e.stopPropagation();
+    });
+  }
+
+  _resetStick() {
+    this._stick.x = 0;
+    this._stick.y = 0;
+    if (this._el.stick_knob) this._el.stick_knob.style.transform = 'translate(0px,0px)';
+  }
+
+  _setHandedness(handed) {
+    if (handed !== 'left' && handed !== 'right') return;
+    this._handed = handed;
+    this._applyHandedness();
+    try {
+      localStorage.setItem(SETTINGS_LS_KEY, JSON.stringify({ handed: handed }));
+    } catch (e) { /* ignore */ }
+  }
+
+  _applyHandedness() {
+    var left = this._handed === 'left';
+    var stick = this._el.stick_zone;
+    var actions = this._el.actions;
+    stick.style.left = left ? 'auto' : '28px';
+    stick.style.right = left ? '28px' : 'auto';
+    actions.style.left = left ? '28px' : 'auto';
+    actions.style.right = left ? 'auto' : '28px';
+
+    var active = 'rgba(143,216,255,.22)';
+    var activeBorder = 'rgba(143,216,255,.45)';
+    var idle = 'rgba(8,13,20,.55)';
+    var idleBorder = 'rgba(255,255,255,.12)';
+    this._el.handed_right.style.background = left ? idle : active;
+    this._el.handed_right.style.borderColor = left ? idleBorder : activeBorder;
+    this._el.handed_left.style.background = left ? active : idle;
+    this._el.handed_left.style.borderColor = left ? activeBorder : idleBorder;
+  }
+
   _enableDragLook() {
     this._dragLook = true;
-    this._el.hint.textContent = 'WASD move \u00b7 DRAG look \u00b7 SPACE double-jump \u00b7 SHIFT sprint \u00b7 E discover';
+    if (this._isMobile) {
+      this._el.hint.style.display = 'none';
+    } else {
+      this._el.hint.textContent = 'WASD move \u00b7 DRAG look \u00b7 SPACE double-jump \u00b7 SHIFT sprint \u00b7 E discover';
+    }
     this._setLookActive(true);
   }
 
@@ -699,14 +925,19 @@ export class InfiniteWorld extends HTMLElement {
       }
       this._popupBeacon = nearest;
       this._el.popup_kicker.textContent = 'POINT OF INTEREST \u00b7 ' + Math.max(1, Math.round(Math.sqrt(nearestD2))) + 'm';
-      this._el.popup_action.textContent = nearest.discovered ? '\u2713 DISCOVERED' : '[ E ] DISCOVER';
+      this._el.popup_action.textContent = nearest.discovered
+        ? '\u2713 DISCOVERED'
+        : (this._isMobile ? 'TAP TO DISCOVER' : '[ E ] DISCOVER');
       this._el.popup_action.style.color = nearest.discovered ? 'rgba(255,255,255,.5)' : '#ffd86b';
       popup.style.opacity = '1';
       popup.style.transform = 'translate(-50%, 0)';
+      popup.style.pointerEvents = this._isMobile && !nearest.discovered ? 'auto' : 'none';
+      popup.style.cursor = this._isMobile && !nearest.discovered ? 'pointer' : 'default';
     } else {
       this._popupBeacon = null;
       popup.style.opacity = '0';
       popup.style.transform = 'translate(-50%, 10px)';
+      popup.style.pointerEvents = 'none';
     }
   }
 
@@ -737,14 +968,16 @@ export class InfiniteWorld extends HTMLElement {
 
   _updateMovement(dt) {
     var cam = this._camera.position;
-    var fwd = (this._keys.w ? 1 : 0) - (this._keys.s ? 1 : 0);
-    var str = (this._keys.d ? 1 : 0) - (this._keys.a ? 1 : 0);
+    var fwd = (this._keys.w ? 1 : 0) - (this._keys.s ? 1 : 0) - this._stick.y;
+    var str = (this._keys.d ? 1 : 0) - (this._keys.a ? 1 : 0) + this._stick.x;
+    var mag = Math.sqrt(fwd * fwd + str * str);
+    if (mag > 1) { fwd /= mag; str /= mag; }
     var yaw = this._yaw;
     var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     var rx = Math.cos(yaw), rz = -Math.sin(yaw);
     var wx = fx * fwd + rx * str, wz = fz * fwd + rz * str;
     var wl = Math.sqrt(wx * wx + wz * wz);
-    var speed = this._keys.shift ? SPRINT_SPEED : WALK_SPEED;
+    var speed = (this._keys.shift || this._mobileSprint) ? SPRINT_SPEED : WALK_SPEED;
     if (wl > 0) {
       var ux = wx / wl, uz = wz / wl;
       var hAhead = terrainHeight(cam.x + ux * 3.5, cam.z + uz * 3.5);

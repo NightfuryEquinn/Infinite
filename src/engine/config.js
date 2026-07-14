@@ -28,3 +28,4 @@ export var SUN = (function () {
   return [x / l, y / l, z / l];
 })();
 export var LS_KEY = 'infinite-explorer-discovered-v1';
+export var SETTINGS_LS_KEY = 'infinite-explorer-settings-v1';

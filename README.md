@@ -47,6 +47,17 @@ bun run preview
 | **Shift** | Sprint |
 | **E** | Discover nearby point of interest |
 
+### Mobile
+
+| Control | Action |
+|---------|--------|
+| **Virtual stick** | Move |
+| **Drag** (on world) | Look |
+| **Jump** button | Jump / double-jump |
+| **Sprint** button | Hold to sprint |
+| **⚙** settings | Left- or right-handed layout |
+
+
 ## Project layout
 
 ```
