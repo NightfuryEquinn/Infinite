@@ -3,7 +3,7 @@
 export var TREE_MAX_PER_CHUNK = 5;
 export var CHUNK_SIZE = 64;
 export var TREE_HEIGHT_SCALE = 1.8;
-export var CHUNK_RES = 36;
+export var CHUNK_RES = 56;
 export var VIEW_RADIUS = 6;
 /* Must be >= VIEW_RADIUS so terrain/trees share one stable disk around the player. */
 export var UNLOAD_RADIUS = 7;

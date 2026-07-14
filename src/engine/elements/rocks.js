@@ -1,8 +1,9 @@
 import * as assimpModule from 'assimpjs';
 import assimpWasm from 'assimpjs/dist/assimpjs.wasm?url';
 import rockTexUrl from '../../assets/Rock-Texture-Surface.jpg';
+import { biomeName } from '../biomes/index.js';
 import { CHUNK_SIZE } from '../config.js';
-import { ihash } from '../noise.js';
+import { fbm, ihash } from '../noise.js';
 import { terrainHeight, terrainNormal, terrainNormalY } from '../terrain/height.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -315,9 +316,14 @@ export function spawnRocks(chunk, ctx) {
     var x = (cx + 0.03 + rx * 0.94) * CHUNK_SIZE;
     var z = (cz + 0.03 + rz * 0.94) * CHUNK_SIZE;
     var h = terrainHeight(x, z);
-    if (h < 0.6 || h > 44) continue;
-    /* Prefer slopes/cliffs; skip most flat ground. */
-    if (terrainNormalY(x, z) >= 0.82 && r4 >= 0.35) continue;
+    if (h < 0.15) continue;
+    var ny = terrainNormalY(x, z);
+    var biome = biomeName(h, ny, x, z);
+    /* Beaches + plains only; woods = forested plains (same noise as trees). */
+    if (biome !== 'Sandy Shores' && biome !== 'Verdant Plains') continue;
+    var forest = fbm(cx * 0.13 + 5.2, cz * 0.13 - 3.1, 2);
+    var inWoods = biome === 'Verdant Plains' && h >= 2.8 && h <= 22 && forest > 0.50;
+    if (biome === 'Verdant Plains' && !inWoods && ny >= 0.92 && r4 >= 0.55) continue;
 
     /* 1× default size → 5×; bias toward smaller rocks. */
     var s = 1 + r3 * r3 * 4;
