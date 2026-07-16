@@ -24,6 +24,9 @@ import { TERRAIN_FRAG, TERRAIN_VERT } from './terrain/shaders.js';
 import { hudHTML } from './ui/hud.js';
 import { Howl } from 'howler';
 import musicUrl from '../assets/a-drifting-lens-amos-roddy.mp3';
+import grassWalkUrl from '../assets/grass-walk.mp3';
+import snowWalkUrl from '../assets/snow-walk.mp3';
+import waterWalkUrl from '../assets/water-walk.mp3';
 
 // Custom element that owns the infinite world explorer (UI, chunks, render loop)
 export class InfiniteWorld extends HTMLElement {
@@ -104,6 +107,10 @@ export class InfiniteWorld extends HTMLElement {
     this._handed = 'right';
     this._musicOn = true;
     this._music = null;
+    this._walkSounds = null;
+    this._walkSoundTimer = 0;
+    this._walkSoundId = null;
+    this._walkSoundKind = null;
     this._isMobile = this._detectMobile();
 
     try {
@@ -123,6 +130,7 @@ export class InfiniteWorld extends HTMLElement {
     } catch (e) { /* ignore */ }
 
     this._initMusic();
+    this._initWalkSounds();
     this._syncMusicButton();
 
     // Loads Three.js then initializes the scene or reports failure
@@ -141,6 +149,16 @@ export class InfiniteWorld extends HTMLElement {
       this._music.stop();
       this._music.unload();
       this._music = null;
+    }
+
+    if (this._walkSounds) {
+      ['grass', 'snow', 'water'].forEach(function (kind) {
+        var s = self._walkSounds[kind];
+        if (!s) return;
+        s.stop();
+        s.unload();
+      });
+      this._walkSounds = null;
     }
 
     // Runs all stored event unbinders
@@ -751,6 +769,53 @@ export class InfiniteWorld extends HTMLElement {
     });
   }
 
+  // Creates Howler footstep clips trimmed to the first second
+  _initWalkSounds() {
+    // Builds a Howl for one surface with a 1s sprite
+    function makeWalk(src, volume) {
+      return new Howl({
+        src: [src],
+        volume: volume,
+        preload: true,
+        sprite: { step: [0, 1000] }
+      });
+    }
+
+    this._walkSounds = {
+      grass: makeWalk(grassWalkUrl, 0.4),
+      snow: makeWalk(snowWalkUrl, 0.4),
+      water: makeWalk(waterWalkUrl, 0.35)
+    };
+  }
+
+  // Plays surface footstep audio while the player is walking on the ground
+  _updateWalkSounds(dt) {
+    if (!this._walkSounds || this._loading || this._airborne || this._speed < 1.2) {
+      this._walkSoundTimer = 0;
+      return;
+    }
+
+    var cam = this._camera.position;
+    var h = terrainHeight(cam.x, cam.z);
+    var kind = h < SEA_LEVEL ? 'water' : (h > 36 ? 'snow' : 'grass');
+    var interval = this._speed > WALK_SPEED * 1.15 ? 0.32 : 0.46;
+
+    this._walkSoundTimer += dt;
+    if (this._walkSoundTimer < interval) return;
+    this._walkSoundTimer = 0;
+
+    var sound = this._walkSounds[kind];
+    if (!sound) return;
+
+    if (this._walkSoundId != null && this._walkSoundKind) {
+      var prev = this._walkSounds[this._walkSoundKind];
+      if (prev) prev.stop(this._walkSoundId);
+    }
+
+    this._walkSoundKind = kind;
+    this._walkSoundId = sound.play('step');
+  }
+
   // Updates music button pressed state and highlight styling
   _syncMusicButton() {
     var btn = this._el && this._el.music;
@@ -1195,9 +1260,20 @@ export class InfiniteWorld extends HTMLElement {
 
     if (wl > 0) {
       var ux = wx / wl, uz = wz / wl;
-      var hAhead = terrainHeight(cam.x + ux * 3.5, cam.z + uz * 3.5);
-      var slope = Math.max(0, (hAhead - this._groundH) / 3.5);
-      var mul = 1 / (1 + slope * 1.4);
+      var look = 3.5;
+      var hHere = terrainHeight(cam.x, cam.z);
+      var hAhead = terrainHeight(cam.x + ux * look, cam.z + uz * look);
+      var grade = (hAhead - hHere) / look;
+      var mul;
+
+      // Water biomes: slow uphill, speed downhill on steep seabed
+      if (hHere < SEA_LEVEL) {
+        if (grade >= 0) mul = 1 / (1 + grade * 1.4);
+        else mul = 1 + Math.min(0.85, -grade * 1.1);
+      } else {
+        mul = 1 / (1 + Math.max(0, grade) * 1.4);
+      }
+
       var depth = SEA_LEVEL - this._groundH;
       if (depth > 0) mul *= 1 - 0.62 * sstep(0, 2.2, depth);
       if (this._airborne) mul = Math.max(mul, 0.75);
@@ -1234,6 +1310,7 @@ export class InfiniteWorld extends HTMLElement {
     this._camera.rotation.y = this._yaw;
     this._camera.rotation.x = this._pitch;
     this._speed = Math.sqrt(this._vel.x * this._vel.x + this._vel.z * this._vel.z);
+    this._updateWalkSounds(dt);
   }
 
   // Pushes the camera out of nearby tree and rock colliders
