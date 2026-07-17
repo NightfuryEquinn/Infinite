@@ -1,14 +1,10 @@
-import * as assimpModule from 'assimpjs';
-import assimpWasm from 'assimpjs/dist/assimpjs.wasm?url';
 import rockTexUrl from '../../assets/rock.jpg';
 import { biomeName } from '../biomes/index.js';
 import { CHUNK_SIZE } from '../config.js';
 import { fbm, ihash } from '../noise.js';
 import { terrainHeight, terrainNormal, terrainNormalY } from '../terrain/height.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-var ROCK_URL = new URL('../../assets/rock.blend', import.meta.url).href;
+var ROCK_URL = new URL('../../assets/rock.glb', import.meta.url).href;
 var TARGET_HEIGHT = 2.4;
 var _yAxis = null;
 var _yawQ = null;
@@ -16,40 +12,6 @@ var _alignQ = null;
 var _nml = null;
 var _pos = null;
 var _off = null;
-
-// Normalizes loader input into a standalone ArrayBuffer
-function toArrayBuffer(data) {
-  if (data instanceof ArrayBuffer) return data;
-
-  if (ArrayBuffer.isView(data)) {
-    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  }
-
-  return data;
-}
-
-// Parses a GLB buffer into a glTF scene graph
-function parseGlb(buffer) {
-  return new Promise(function (resolve, reject) {
-    new GLTFLoader().parse(toArrayBuffer(buffer), '', resolve, reject);
-  });
-}
-
-// Initializes the assimpjs WASM module for blend conversion
-async function getAssimp() {
-  var factory = assimpModule.default || assimpModule['module.exports'];
-
-  if (typeof factory !== 'function') {
-    throw new Error('assimpjs failed to load');
-  }
-
-  return factory({
-    // Resolves assimp WASM and other asset paths
-    locateFile: function (path) {
-      return path.endsWith('.wasm') ? assimpWasm : path;
-    }
-  });
-}
 
 // Generates planar UVs on geometry that lacks a uv attribute
 function ensureUVs(THREE, geometry) {
@@ -159,7 +121,7 @@ function attachRockEffects(THREE, material, env) {
 }
 
 // Merges rock meshes into a placed, tipped instancing-ready asset
-function prepareRockVariant(THREE, root, env, rockTex) {
+function prepareRockVariant(THREE, root, env, rockTex, mergeGeometries) {
   var wrapper = orientRockRoot(THREE, root);
   wrapper.updateMatrixWorld(true);
 
@@ -182,7 +144,7 @@ function prepareRockVariant(THREE, root, env, rockTex) {
   wrapper.traverse(function (child) {
     if (!child.isMesh || !child.geometry) return;
 
-    /* rock.blend ships a flat texture Plane alongside the sculpted rock. */
+    /* The source rock model includes a flat texture plane alongside the sculpted rock. */
     var localBox = new THREE.Box3().setFromBufferAttribute(child.geometry.attributes.position);
     var localSize = new THREE.Vector3();
     localBox.getSize(localSize);
@@ -266,26 +228,15 @@ function loadRockTexture(THREE) {
   });
 }
 
-// Converts rock.blend to GLB via assimp and prepares the mesh
-async function loadBlendRock(THREE, env, rockTex) {
-  var ajs = await getAssimp();
-  var res = await fetch(ROCK_URL);
+// Loads the prebuilt rock GLB and prepares its instanced mesh
+async function loadGlbRock(THREE, env, rockTex) {
+  var modules = await Promise.all([
+    import('three/examples/jsm/loaders/GLTFLoader.js'),
+    import('three/examples/jsm/utils/BufferGeometryUtils.js')
+  ]);
+  var gltf = await new modules[0].GLTFLoader().loadAsync(ROCK_URL);
 
-  if (!res.ok) throw new Error('failed to fetch rock.blend');
-
-  var blend = new Uint8Array(await res.arrayBuffer());
-  var fileList = new ajs.FileList();
-  fileList.AddFile('rock.blend', blend);
-  var result = ajs.ConvertFileList(fileList, 'glb2');
-
-  if (!result.IsSuccess() || result.FileCount() === 0) {
-    throw new Error('rock.blend conversion failed: ' + result.GetErrorCode());
-  }
-
-  var glb = result.GetFile(0).GetContent();
-  var gltf = await parseGlb(glb);
-
-  return prepareRockVariant(THREE, gltf.scene, env, rockTex);
+  return prepareRockVariant(THREE, gltf.scene, env, rockTex, modules[1].mergeGeometries);
 }
 
 // Procedural fallback mesh if the blend asset fails to load
@@ -334,15 +285,15 @@ function buildFallbackRock(THREE, env, rockTex) {
   return rockBounds(geometry, material);
 }
 
-// Loads rock texture and blend mesh with procedural fallback
+// Loads the rock texture and prebuilt GLB with procedural fallback
 export async function loadRockAssets(THREE, env) {
   env.materials = env.materials || [];
   var rockTex = await loadRockTexture(THREE);
 
   try {
-    return await loadBlendRock(THREE, env, rockTex);
+    return await loadGlbRock(THREE, env, rockTex);
   } catch (err) {
-    console.warn('[rocks] rock.blend failed, using procedural mesh:', err);
+    console.warn('[rocks] rock.glb failed, using procedural mesh:', err);
     return buildFallbackRock(THREE, env, rockTex);
   }
 }

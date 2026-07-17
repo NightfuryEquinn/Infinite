@@ -1,95 +1,9 @@
-import * as assimpModule from 'assimpjs';
-import assimpWasm from 'assimpjs/dist/assimpjs.wasm?url';
-import barkUrl from '../../assets/bark.jpg';
-import blattUrl from '../../assets/leaf.jpg';
-import blattAlphaUrl from '../../assets/leaf_a.jpg';
 import { CHUNK_SIZE, TREE_HEIGHT_SCALE, TREE_MAX_PER_CHUNK } from '../config.js';
 import { fbm, ihash, sstep } from '../noise.js';
 import { terrainHeight, terrainNormalY } from '../terrain/height.js';
-import { TDSLoader } from 'three/examples/jsm/loaders/TDSLoader.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-var ASSET_BASE = new URL('../../assets/', import.meta.url).href;
-var TREE1_URL = new URL('../../assets/tree.3ds', import.meta.url).href;
-var BIRCH_URL = new URL('../../assets/birch_tree.blend', import.meta.url).href;
+var BIRCH_URL = new URL('../../assets/birch_tree.glb', import.meta.url).href;
 var TARGET_HEIGHT = 11.5 * TREE_HEIGHT_SCALE;
-
-export var TREE_VERT = [
-  'attribute vec3 aCol;',
-  'attribute float aSway;',
-  'uniform float uTime;',
-  'uniform float uGust;',
-  'varying vec3 vCol;',
-  'varying vec3 vWorld;',
-  'varying vec3 vNormal;',
-  'varying float vH;',
-  'varying float vFol;',
-  'void main() {',
-  '  vCol = aCol;',
-  '  vH = position.y;',
-  '  vFol = aSway;',
-  '  vec3 n = normal;',
-  '  vec4 lp = vec4(position, 1.0);',
-  '  #ifdef USE_INSTANCING',
-  '    lp = instanceMatrix * lp;',
-  '    n = mat3(instanceMatrix) * n;',
-  '  #endif',
-  '  vec4 wp = modelMatrix * lp;',
-  '  float sway = aSway * max(position.y - 1.0, 0.0) * 0.16 * uGust;',
-  '  wp.x += sin(uTime * 1.7 + wp.z * 0.08 + wp.x * 0.05) * sway;',
-  '  wp.z += cos(uTime * 1.3 + wp.x * 0.07) * sway * 0.6;',
-  '  vWorld = wp.xyz;',
-  '  vNormal = normalize(mat3(modelMatrix) * n);',
-  '  gl_Position = projectionMatrix * viewMatrix * wp;',
-  '}'
-].join('\n');
-
-export var TREE_FRAG = [
-  'uniform vec3 uSunDir;',
-  'uniform vec3 uAmbient;',
-  'uniform vec3 uSunCol;',
-  'uniform vec3 uFogColor;',
-  'uniform float uFogNear;',
-  'uniform float uFogFar;',
-  'varying vec3 vCol;',
-  'varying vec3 vWorld;',
-  'varying vec3 vNormal;',
-  'varying float vH;',
-  'varying float vFol;',
-  'void main() {',
-  '  vec3 n = normalize(vNormal);',
-  '  vec3 v = normalize(cameraPosition - vWorld);',
-  '  float ndl = dot(n, uSunDir);',
-  '  float diff = ndl * 0.5 + 0.5;',
-  '  vec3 light = uAmbient * 1.05 + uSunCol * diff * 1.15;',
-  '  float ao = 0.48 + 0.52 * smoothstep(-0.3, 2.0, vH);',
-  '  vec3 c = vCol * ao * light;',
-  '  if (vFol > 0.5) {',
-  '    float back = pow(max(dot(-uSunDir, v), 0.0), 2.2) * 0.42;',
-  '    float rim = pow(1.0 - max(dot(n, v), 0.0), 2.6) * 0.18;',
-  '    c += vec3(0.10, 0.22, 0.08) * (back + rim);',
-  '    c = mix(c, c * 1.08, smoothstep(0.2, 0.85, vH));',
-  '  } else {',
-  '    float grain = 0.90 + 0.10 * sin(vWorld.y * 4.8 + vWorld.x * 1.7);',
-  '    c *= grain * (0.82 + 0.18 * smoothstep(-0.5, 0.2, ndl));',
-  '  }',
-  '  float fog = smoothstep(uFogNear, uFogFar, length(cameraPosition - vWorld));',
-  '  c = mix(c, uFogColor, fog);',
-  '  gl_FragColor = vec4(c, 1.0);',
-  '}'
-].join('\n');
-
-// Normalizes loader input into a standalone ArrayBuffer
-function toArrayBuffer(data) {
-  if (data instanceof ArrayBuffer) return data;
-
-  if (ArrayBuffer.isView(data)) {
-    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  }
-
-  return data;
-}
 
 // Extracts one geometry group into its own indexed buffer geometry
 function extractGroupGeometry(THREE, geometry, group) {
@@ -129,75 +43,6 @@ function extractGroupGeometry(THREE, geometry, group) {
   geo.setIndex(newIdx);
 
   return geo;
-}
-
-// Returns true when a material should be treated as tree foliage
-function isTreeFoliageMaterial(mat, meshMidY) {
-  if (!mat) return false;
-
-  var name = (mat.name || '').toLowerCase();
-
-  if (/leaf|blatt|foliage|green|laub|rinde_leaf/i.test(name)) return true;
-  if (/rind|bark|stamm|trunk|rinde_level/i.test(name)) return false;
-  if (mat.alphaMap) return true;
-  if (mat.color && mat.color.g > mat.color.r * 1.1 && mat.color.g > 0.2) return true;
-
-  return meshMidY > 0.35 && (mat.transparent || mat.opacity < 0.99);
-}
-
-// Applies bark and leaf textures to the legacy 3DS tree model
-function applyTree1Textures(THREE, root) {
-  var texLoader = new THREE.TextureLoader();
-  var barkTex = texLoader.load(barkUrl);
-  var leafTex = texLoader.load(blattUrl);
-  var leafAlpha = texLoader.load(blattAlphaUrl);
-
-  [barkTex, leafTex, leafAlpha].forEach(function (tex) {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 4;
-  });
-  leafAlpha.colorSpace = THREE.NoColorSpace;
-
-  // Assigns bark or leaf maps to each mesh material
-  root.traverse(function (child) {
-    if (!child.isMesh) return;
-
-    var mats = Array.isArray(child.material) ? child.material : [child.material];
-    var meshBox = new THREE.Box3().setFromObject(child);
-    var meshMidY = (meshBox.min.y + meshBox.max.y) * 0.5;
-
-    mats.forEach(function (mat) {
-      if (!mat) return;
-
-      if (!mat.color) mat.color = new THREE.Color(0xffffff);
-
-      if (isTreeFoliageMaterial(mat, meshMidY)) {
-        mat.map = leafTex;
-        mat.alphaMap = leafAlpha;
-      } else {
-        mat.map = barkTex;
-        mat.alphaMap = null;
-      }
-
-      mat.color.setHex(0xffffff);
-    });
-  });
-}
-
-// Initializes the assimpjs WASM module for blend conversion
-async function getAssimp() {
-  var factory = assimpModule.default || assimpModule['module.exports'];
-
-  if (typeof factory !== 'function') {
-    throw new Error('assimpjs failed to load');
-  }
-
-  return factory({
-    // Resolves assimp WASM and other asset paths
-    locateFile: function (path) {
-      return path.endsWith('.wasm') ? assimpWasm : path;
-    }
-  });
 }
 
 // Returns true when a material should be treated as foliage
@@ -333,7 +178,7 @@ function attachTreeEffects(THREE, material, env) {
 }
 
 // Scales and merges tree meshes into instancing-ready parts
-function prepareTreeVariant(THREE, root, env) {
+function prepareTreeVariant(THREE, root, env, mergeGeometries) {
   var wrapper = orientTreeRoot(THREE, root);
   wrapper.updateMatrixWorld(true);
 
@@ -420,66 +265,17 @@ function prepareTreeVariant(THREE, root, env) {
   return { parts: parts, height: height, radius: radius };
 }
 
-// Parses a GLB buffer into a glTF scene graph
-function parseGlb(buffer) {
-  return new Promise(function (resolve, reject) {
-    new GLTFLoader().parse(toArrayBuffer(buffer), '', resolve, reject);
-  });
-}
-
-// Converts birch_tree.blend to GLB via assimp and prepares the mesh
-async function loadBlendTree(THREE, env) {
-  var ajs = await getAssimp();
-  var res = await fetch(BIRCH_URL);
-
-  if (!res.ok) throw new Error('failed to fetch birch_tree.blend');
-
-  var blend = new Uint8Array(await res.arrayBuffer());
-  var fileList = new ajs.FileList();
-  fileList.AddFile('birch_tree.blend', blend);
-  var result = ajs.ConvertFileList(fileList, 'glb2');
-
-  if (!result.IsSuccess() || result.FileCount() === 0) {
-    throw new Error('birch_tree.blend conversion failed: ' + result.GetErrorCode());
-  }
-
-  var glb = result.GetFile(0).GetContent();
-  var gltf = await parseGlb(glb);
-
-  return prepareTreeVariant(THREE, gltf.scene, env);
-}
-
-// Loads the legacy 3DS tree model and applies textures
-async function load3DSTree(THREE, env) {
-  var loader = new TDSLoader();
-  loader.setResourcePath(ASSET_BASE);
-  var root = await loader.loadAsync(TREE1_URL);
-  applyTree1Textures(THREE, root);
-
-  return prepareTreeVariant(THREE, root, env);
-}
-
-// Loads all tree model variants, tolerating individual failures
+// Loads the prebuilt birch GLB and prepares it for instanced rendering
 export async function loadTreeAssets(THREE, env) {
   env.materials = env.materials || [];
-  var results = await Promise.allSettled([
-    load3DSTree(THREE, env),
-    loadBlendTree(THREE, env)
+  var modules = await Promise.all([
+    import('three/examples/jsm/loaders/GLTFLoader.js'),
+    import('three/examples/jsm/utils/BufferGeometryUtils.js')
   ]);
-  var variants = [];
+  var gltf = await new modules[0].GLTFLoader().loadAsync(BIRCH_URL);
+  var variant = prepareTreeVariant(THREE, gltf.scene, env, modules[1].mergeGeometries);
 
-  results.forEach(function (result, i) {
-    if (result.status === 'fulfilled') {
-      variants.push(result.value);
-      return;
-    }
-
-    console.warn('[trees] failed to load variant ' + i + ':', result.reason);
-  });
-
-  if (!variants.length) throw new Error('no tree models could be loaded');
-
-  return variants;
+  return [variant];
 }
 
 // Places instanced trees in forested terrain for a chunk

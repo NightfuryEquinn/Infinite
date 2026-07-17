@@ -10,13 +10,24 @@ export var WATER_FLOOR_MAX = 22;
 export function createFloorHeightmap(THREE) {
   var n = WATER_FLOOR_RES;
   var data = new Uint8Array(n * n * 2);
+  var cells = n * n;
   var tex = new THREE.DataTexture(data, n, n, THREE.RGFormat);
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
 
-  return { tex: tex, data: data, originX: 0, originZ: 0, lastGX: null, lastGZ: null };
+  return {
+    tex: tex,
+    data: data,
+    wet: new Uint8Array(cells),
+    ocean: new Uint8Array(cells),
+    queue: new Int32Array(cells),
+    originX: 0,
+    originZ: 0,
+    lastGX: null,
+    lastGZ: null
+  };
 }
 
 // Updates water-floor heightmap (R = terrain height, G = ocean connectivity) around the camera
@@ -36,9 +47,11 @@ export function updateFloorHeightmap(floor, cx, cz) {
   var step = ext / (n - 1);
   var minH = WATER_FLOOR_MIN, maxH = WATER_FLOOR_MAX;
   var inv = 1 / (maxH - minH);
-  var wet = new Uint8Array(n * n);
-  var ocean = new Uint8Array(n * n);
-  var queue = new Int32Array(n * n);
+  var wet = floor.wet;
+  var ocean = floor.ocean;
+  var queue = floor.queue;
+  wet.fill(0);
+  ocean.fill(0);
   var qh = 0, qt = 0;
 
   for (var iz = 0; iz < n; iz++) {
@@ -68,20 +81,26 @@ export function updateFloorHeightmap(floor, cx, cz) {
     var cur = queue[qh++];
     var cy = (cur / n) | 0;
     var cx0 = cur - cy * n;
-    var nbs = [
-      cx0 > 0 ? cur - 1 : -1,
-      cx0 < n - 1 ? cur + 1 : -1,
-      cy > 0 ? cur - n : -1,
-      cy < n - 1 ? cur + n : -1
-    ];
+    var left = cx0 > 0 ? cur - 1 : -1;
+    var right = cx0 < n - 1 ? cur + 1 : -1;
+    var up = cy > 0 ? cur - n : -1;
+    var down = cy < n - 1 ? cur + n : -1;
 
-    for (var k = 0; k < 4; k++) {
-      var ni = nbs[k];
-
-      if (ni < 0 || !wet[ni] || ocean[ni]) continue;
-
-      ocean[ni] = 1;
-      queue[qt++] = ni;
+    if (left >= 0 && wet[left] && !ocean[left]) {
+      ocean[left] = 1;
+      queue[qt++] = left;
+    }
+    if (right >= 0 && wet[right] && !ocean[right]) {
+      ocean[right] = 1;
+      queue[qt++] = right;
+    }
+    if (up >= 0 && wet[up] && !ocean[up]) {
+      ocean[up] = 1;
+      queue[qt++] = up;
+    }
+    if (down >= 0 && wet[down] && !ocean[down]) {
+      ocean[down] = 1;
+      queue[qt++] = down;
     }
   }
 

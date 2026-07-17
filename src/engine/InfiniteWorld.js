@@ -82,6 +82,7 @@ export class InfiniteWorld extends HTMLElement {
     this._last = 0;
     this._hudLast = 0;
     this._mapLast = -1e9;
+    this._mapDrawLast = -1e9;
     this._fpsFrames = 0;
     this._fpsLast = 0;
     this._fps = 60;
@@ -90,6 +91,7 @@ export class InfiniteWorld extends HTMLElement {
     this._dragLook = false;
     this._dragging = false;
     this._popupBeacon = null;
+    this._popupUiKey = null;
     this._ccx = null; this._ccz = null;
     this._vy = 0;
     this._airborne = false;
@@ -355,9 +357,6 @@ export class InfiniteWorld extends HTMLElement {
     this._treeEnv = {
       uTime: { value: 0 },
       uGust: { value: 0.6 },
-      uSunDir: { value: sunDir },
-      uAmbient: { value: this._ambientCol },
-      uSunCol: { value: this._sunLightCol },
       uFogColor: { value: fogColor },
       uFogNear: { value: FOG_NEAR },
       uFogFar: { value: FOG_FAR },
@@ -1089,24 +1088,27 @@ export class InfiniteWorld extends HTMLElement {
   _updateAtmosphere(dt) {
     var t = this._time;
     var cam = this._camera.position;
+    var shadowsActive = this._day >= 0.05;
+    this._sunLight.shadow.autoUpdate = shadowsActive;
 
-    // Keep the shadow volume centered on the player so received shadows track movement.
-    // Snap to shadow-map texels to reduce swimming as the camera moves.
-    var lift = 40;
-    var texel = (SHADOW_EXTENT * 2) / SHADOW_MAP_SIZE;
-    var tx = Math.round(cam.x / texel) * texel;
-    var tz = Math.round(cam.z / texel) * texel;
+    if (shadowsActive) {
+      // Keep the shadow volume centered on the player and snapped to shadow-map texels.
+      var lift = 40;
+      var texel = (SHADOW_EXTENT * 2) / SHADOW_MAP_SIZE;
+      var tx = Math.round(cam.x / texel) * texel;
+      var tz = Math.round(cam.z / texel) * texel;
 
-    this._sunLight.target.position.set(tx, cam.y, tz);
-    this._sunLight.target.updateMatrixWorld();
+      this._sunLight.target.position.set(tx, cam.y, tz);
+      this._sunLight.target.updateMatrixWorld();
 
-    var reach = SHADOW_EXTENT * 0.85;
-    this._sunLight.position.set(
-      tx + this._sunDir.x * reach,
-      cam.y + this._sunDir.y * reach + lift,
-      tz + this._sunDir.z * reach
-    );
-    this._sunLight.updateMatrixWorld();
+      var reach = SHADOW_EXTENT * 0.85;
+      this._sunLight.position.set(
+        tx + this._sunDir.x * reach,
+        cam.y + this._sunDir.y * reach + lift,
+        tz + this._sunDir.z * reach
+      );
+      this._sunLight.updateMatrixWorld();
+    }
 
     var W = this._weather;
     if (t > W.gustUntil) { W.gustOn = !W.gustOn; W.gustUntil = t + 60 + Math.random() * 1140; }
@@ -1125,25 +1127,30 @@ export class InfiniteWorld extends HTMLElement {
     this._treeEnv.uTime.value = t;
     this._treeEnv.uGust.value = 0.15 + 1.8 * gust;
 
-    var d = this._wind.data, a = this._wind.attr.array;
-    var speed = 13 + 36 * gust;
-    for (var i = 0; i < WIND_N; i++) {
-      var o = i * 4, p6 = i * 6;
-      var mul = 0.7 + d[o + 3] * 0.6;
-      d[o] += wx * speed * dt * mul;
-      d[o + 2] += wz * speed * dt * mul;
-      d[o + 1] -= dt * 0.4;
-      if (d[o] < cam.x - 60) d[o] += 120; else if (d[o] > cam.x + 60) d[o] -= 120;
-      if (d[o + 2] < cam.z - 60) d[o + 2] += 120; else if (d[o + 2] > cam.z + 60) d[o + 2] -= 120;
-      if (d[o + 1] < cam.y - 10) d[o + 1] += 26; else if (d[o + 1] > cam.y + 16) d[o + 1] -= 26;
-      var len = 1.2 + 3.2 * gust * (0.5 + d[o + 3] * 0.5);
-      a[p6] = d[o]; a[p6 + 1] = d[o + 1]; a[p6 + 2] = d[o + 2];
-      a[p6 + 3] = d[o] + wx * len; a[p6 + 4] = d[o + 1]; a[p6 + 5] = d[o + 2] + wz * len;
-    }
-    this._wind.attr.needsUpdate = true;
-
     var wm = this._wind.line.material;
     wm.opacity += ((0.04 + 0.26 * gust) - wm.opacity) * Math.min(1, dt * 2);
+    this._wind.line.visible = wm.opacity >= 0.015;
+
+    if (this._wind.line.visible) {
+      var d = this._wind.data, a = this._wind.attr.array;
+      var speed = 13 + 36 * gust;
+
+      for (var i = 0; i < WIND_N; i++) {
+        var o = i * 4, p6 = i * 6;
+        var mul = 0.7 + d[o + 3] * 0.6;
+        d[o] += wx * speed * dt * mul;
+        d[o + 2] += wz * speed * dt * mul;
+        d[o + 1] -= dt * 0.4;
+        if (d[o] < cam.x - 60) d[o] += 120; else if (d[o] > cam.x + 60) d[o] -= 120;
+        if (d[o + 2] < cam.z - 60) d[o + 2] += 120; else if (d[o + 2] > cam.z + 60) d[o + 2] -= 120;
+        if (d[o + 1] < cam.y - 10) d[o + 1] += 26; else if (d[o + 1] > cam.y + 16) d[o + 1] -= 26;
+        var len = 1.2 + 3.2 * gust * (0.5 + d[o + 3] * 0.5);
+        a[p6] = d[o]; a[p6 + 1] = d[o + 1]; a[p6 + 2] = d[o + 2];
+        a[p6 + 3] = d[o] + wx * len; a[p6 + 4] = d[o + 1]; a[p6 + 5] = d[o + 2] + wz * len;
+      }
+
+      this._wind.attr.needsUpdate = true;
+    }
 
     var sm = this._snow.pts.material;
     sm.color.setScalar(0.5 + 0.5 * this._day);
@@ -1191,12 +1198,16 @@ export class InfiniteWorld extends HTMLElement {
 
     var popup = this._el.popup;
     if (nearest) {
-      if (this._popupBeacon !== nearest) {
-        this._el.popup_name.textContent = nearest.name;
-        this._el.popup_lore.textContent = nearest.lore;
-      }
+      var distance = Math.max(1, Math.round(Math.sqrt(nearestD2)));
+      var uiKey = nearest.id + '|' + distance + '|' + nearest.discovered + '|' + this._isMobile;
       this._popupBeacon = nearest;
-      this._el.popup_kicker.textContent = 'POINT OF INTEREST \u00b7 ' + Math.max(1, Math.round(Math.sqrt(nearestD2))) + 'm';
+
+      if (this._popupUiKey === uiKey) return;
+
+      this._popupUiKey = uiKey;
+      this._el.popup_name.textContent = nearest.name;
+      this._el.popup_lore.textContent = nearest.lore;
+      this._el.popup_kicker.textContent = 'POINT OF INTEREST \u00b7 ' + distance + 'm';
       this._el.popup_action.textContent = nearest.discovered
         ? '\u2713 DISCOVERED'
         : (this._isMobile ? 'TAP TO DISCOVER' : '[ E ] DISCOVER');
@@ -1207,6 +1218,10 @@ export class InfiniteWorld extends HTMLElement {
       popup.style.cursor = this._isMobile && !nearest.discovered ? 'pointer' : 'default';
     } else {
       this._popupBeacon = null;
+
+      if (this._popupUiKey === 'hidden') return;
+
+      this._popupUiKey = 'hidden';
       popup.style.opacity = '0';
       popup.style.transform = 'translate(-50%, 10px)';
       popup.style.pointerEvents = 'none';
@@ -1227,6 +1242,7 @@ export class InfiniteWorld extends HTMLElement {
     this._el.disc.textContent = '\u25c6 ' + this._discovered.size + ' discovered';
     this._el.popup_action.textContent = '\u2713 DISCOVERED';
     this._el.popup_action.style.color = 'rgba(255,255,255,.5)';
+    this._popupUiKey = null;
   }
 
   // Applies ground jump or double-jump when space is pressed
@@ -1256,7 +1272,8 @@ export class InfiniteWorld extends HTMLElement {
     var rx = Math.cos(yaw), rz = -Math.sin(yaw);
     var wx = fx * fwd + rx * str, wz = fz * fwd + rz * str;
     var wl = Math.sqrt(wx * wx + wz * wz);
-    var speed = (this._keys.shift || this._mobileSprint) ? SPRINT_SPEED : WALK_SPEED;
+    var isSprinting = this._keys.shift || this._mobileSprint;
+    var speed = isSprinting ? SPRINT_SPEED : WALK_SPEED;
 
     if (wl > 0) {
       var ux = wx / wl, uz = wz / wl;
@@ -1276,6 +1293,7 @@ export class InfiniteWorld extends HTMLElement {
 
       var depth = SEA_LEVEL - this._groundH;
       if (depth > 0) mul *= 1 - 0.62 * sstep(0, 2.2, depth);
+      if (isSprinting && mul < 1) mul = Math.pow(mul, 1.35);
       if (this._airborne) mul = Math.max(mul, 0.75);
       speed *= mul;
       wx = ux * speed; wz = uz * speed;
@@ -1464,7 +1482,7 @@ export class InfiniteWorld extends HTMLElement {
 
     if (now - this._hudLast > 100) { this._updateHUD(); this._hudLast = now; }
     if (now - this._mapLast > 280) { this._redrawMinimapBase(); this._mapLast = now; }
-    this._drawMinimap();
+    if (now - this._mapDrawLast > 50) { this._drawMinimap(); this._mapDrawLast = now; }
     this._updateFps(now);
 
     this._renderer.render(this._scene, this._camera);
